@@ -26,12 +26,11 @@ KukaCartesianImpedanceController::on_configure(
     return ret;
   }
 
-
   m_target_frame_subscriber =
       get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
           get_node()->get_name() + std::string("/target_frame"), 3,
-          std::bind(&KukaCartesianImpedanceController::targetFrameCallback, this,
-                    std::placeholders::_1));
+          std::bind(&KukaCartesianImpedanceController::targetFrameCallback,
+                    this, std::placeholders::_1));
 
   m_data_publisher = get_node()->create_publisher<debug_msg::msg::Debug>(
       get_node()->get_name() + std::string("/data"), 1);
@@ -39,7 +38,7 @@ KukaCartesianImpedanceController::on_configure(
 #if LOGGING
   XBot::MatLogger2::Options opt;
   opt.default_buffer_size = 5e8; // set default buffer size
-  opt.enable_compression = true;
+  // opt.enable_compression = true;
   RCLCPP_INFO(get_node()->get_logger(), "\n\nCreating logger\n\n");
   m_logger = XBot::MatLogger2::MakeLogger("/tmp/cart_impedance.mat", opt);
   // m_logger->set_buffer_mode(XBot::VariableBuffer::Mode::circular_buffer);
@@ -99,8 +98,8 @@ KukaCartesianImpedanceController::on_deactivate(
     const rclcpp_lifecycle::State &previous_state) {
   // call logger destructor
 #if LOGGING
-  // m_logger.reset();
   RCLCPP_WARN(get_node()->get_logger(), "\n\nFlushing logger\n\n");
+  m_logger.reset();
 #endif
   // Stop drifting by sending zero joint velocities
   Base::computeJointEffortCmds(ctrl::Vector6D::Zero());
@@ -113,7 +112,7 @@ KukaCartesianImpedanceController::on_deactivate(
 
 controller_interface::return_type
 KukaCartesianImpedanceController::update(const rclcpp::Time &time,
-                                     const rclcpp::Duration &period) {
+                                         const rclcpp::Duration &period) {
   // Update joint states
   Base::updateJointStates();
 
@@ -161,6 +160,8 @@ ctrl::Vector6D KukaCartesianImpedanceController::computeMotionError() {
   return error;
 }
 void KukaCartesianImpedanceController::computeTargetPos() {
+  Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame);
+  KDL::Frame simulated_frame = m_current_frame;
   Eigen::MatrixXd JJt;
   KDL::Jacobian J(Base::m_joint_number);
 
@@ -179,11 +180,12 @@ void KukaCartesianImpedanceController::computeTargetPos() {
   typedef Eigen::Matrix<double, 6, 1> Vector6d;
   Vector6d err;
 
+  // CLIK (closed loop inverse kinematics) algorithm
   for (int i = 0;; i++) {
     // Compute forward kinematics
-    Base::m_fk_solver->JntToCart(q, m_current_frame);
+    Base::m_fk_solver->JntToCart(q, simulated_frame);
     // Compute error (logarithm map from desired frame to current)
-    KDL::Twist delta_twist = KDL::diff(m_current_frame, m_target_frame);
+    KDL::Twist delta_twist = KDL::diff(simulated_frame, m_target_frame);
     for (int j = 0; j < 6; ++j) {
       err(j) = delta_twist[j];
     }
@@ -207,21 +209,34 @@ void KukaCartesianImpedanceController::computeTargetPos() {
 
     // Compute velocity update considering also the nullspace
     // dq = J^T(JJ^T)^-1 * e + (I - J^T(JJ^T)^-1 * J) * dt(q_starting_pose - q)
-    dq.data = J.data.transpose() * JJt.ldlt().solve(err); //+ (m_identity - J.data.transpose() * JJt.ldlt().solve(J.data)) * (m_q_starting_pose - q.data) * DT;
+    dq.data = J.data.transpose() *
+              JJt.ldlt().solve(err); //+ (m_identity - J.data.transpose() *
+                                     // JJt.ldlt().solve(J.data)) *
+                                     //(m_q_starting_pose - q.data) * DT;
     // Integrate joint velocities (Euler integration)
     for (int j = 0; j < Base::m_joint_number; j++) {
       q(j) += dq.data(j) * DT;
     }
 
     // Logging every 10 iterations
-    if (i % 10 == 0) {
-      std::cout << i << ": error = " << err.transpose()
-                << " | err norm = " << err.norm() << std::endl;
-    }
-    RCLCPP_INFO(get_node()->get_logger(), "Error: %f", err.norm());
+    // if (i % 10 == 0) {
+    //   std::cout << i << ": error = " << err.transpose()
+    //             << " | err norm = " << err.norm() << std::endl;
+    // }
+    // RCLCPP_INFO(get_node()->get_logger(), "Error: %f", err.norm());
   }
-
-  m_target_joint_position = q.data;
+  const double alpha = 0.01;
+  auto new_t = alpha * q.data + (1 - alpha) * m_target_joint_position;
+  RCLCPP_INFO_STREAM(get_node()->get_logger(),
+                     "alpha: " << alpha << "| Target: " << q.data.transpose()
+                               << "| Fitered: " << new_t.transpose());
+  RCLCPP_INFO_STREAM(
+      get_node()->get_logger(),
+      "Simulated: " << simulated_frame.p.x() << " " << simulated_frame.p.y()
+                    << " " << simulated_frame.p.z() << " | vs "
+                    << m_current_frame.p.x() << " " << m_current_frame.p.y()
+                    << " " << m_current_frame.p.z());
+  m_target_joint_position = new_t;
 
 #if LOGGING
   m_logger->add("time_sec", get_node()->get_clock()->now().seconds());
@@ -232,14 +247,15 @@ void KukaCartesianImpedanceController::computeTargetPos() {
   m_logger->add("cart_target_z", m_target_frame.p.z());
   Eigen::Matrix<double, 3, 3> rot_des(m_target_frame.M.data);
   m_logger->add("cart_target_M", rot_des);
-  m_logger->add("cart_current_x", m_current_frame.p.x());
-  m_logger->add("cart_current_y", m_current_frame.p.y());
-  m_logger->add("cart_current_z", m_current_frame.p.z());
+  m_logger->add("cart_measured_x", m_current_frame.p.x());
+  m_logger->add("cart_measured_y", m_current_frame.p.y());
+  m_logger->add("cart_measured_z", m_current_frame.p.z());
   Eigen::Matrix<double, 3, 3> M_c(m_current_frame.M.data);
-  m_logger->add("cart_current_M", M_c);
+  m_logger->add("cart_measured_M", M_c);
   // solver outcome
-  m_logger->add("joint_current", Base::m_joint_positions.data);
-  m_logger->add("joint_target", m_target_joint_position);
+  m_logger->add("joint_measured", Base::m_joint_positions.data);
+  m_logger->add("joint_target_IK", q.data);
+  m_logger->add("joint_target_filtered", m_target_joint_position);
 
   std::vector<double> measured_torque(std::begin(m_state.measured_torque),
                                       std::end(m_state.measured_torque));
@@ -257,7 +273,6 @@ void KukaCartesianImpedanceController::computeTargetPos() {
   m_logger->flush_available_data();
 #endif
 }
-
 
 void KukaCartesianImpedanceController::targetFrameCallback(
     const geometry_msgs::msg::PoseStamped::SharedPtr target) {
@@ -277,7 +292,7 @@ void KukaCartesianImpedanceController::targetFrameCallback(
                  KDL::Vector(target->pose.position.x, target->pose.position.y,
                              target->pose.position.z));
 }
-} // namespace cartesian_impedance_controller
+} // namespace kuka_cartesian_impedance_controller
 
 // Pluginlib
 #include <pluginlib/class_list_macros.hpp>
