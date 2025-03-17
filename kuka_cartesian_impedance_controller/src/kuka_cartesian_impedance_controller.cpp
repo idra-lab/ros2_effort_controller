@@ -12,6 +12,12 @@ KukaCartesianImpedanceController::on_init() {
                  CallbackReturn::SUCCESS) {
     return ret;
   }
+  m_max_linear_velocity = get_node()->get_parameter("max_linear_velocity").as_double();
+  m_max_angular_velocity = get_node()->get_parameter("max_angular_velocity").as_double();
+  m_max_linear_velocity = std::max(0.0, m_max_linear_velocity);
+  m_max_angular_velocity = std::max(0.0, m_max_angular_velocity);
+  RCLCPP_WARN(get_node()->get_logger(), "Max linear velocity: %f", m_max_linear_velocity);
+  RCLCPP_WARN(get_node()->get_logger(), "Max angular velocity: %f", m_max_angular_velocity);
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
       CallbackReturn::SUCCESS;
@@ -79,7 +85,7 @@ KukaCartesianImpedanceController::on_activate(
   Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame);
 
   // Set the target frame to the current frame
-  m_target_frame = m_current_frame;
+  m_target_frame = m_filtered_frame = m_current_frame;
 
   RCLCPP_INFO(get_node()->get_logger(), "Finished Impedance on_activate");
 
@@ -116,6 +122,8 @@ KukaCartesianImpedanceController::update(const rclcpp::Time &time,
   // Update joint states
   Base::updateJointStates();
 
+  filterTargetFrame();
+
   computeTargetPos();
   // Write final commands to the hardware interface
   Base::writeJointEffortCmds(m_target_joint_position);
@@ -123,6 +131,44 @@ KukaCartesianImpedanceController::update(const rclcpp::Time &time,
   return controller_interface::return_type::OK;
 }
 
+void KukaCartesianImpedanceController::filterTargetFrame() {
+  if(KDL::Equal(m_target_frame, m_filtered_frame, 1e-3)){
+    return;
+  }
+  // Compute the time since the last update
+  const double current_time = get_node()->get_clock()->now().seconds();
+  double dt = current_time - m_last_time;
+  m_last_time = current_time;
+
+  // Compute the linear and angular velocity of the target frame
+  KDL::Twist target_twist;
+  target_twist.vel = (m_target_frame.p - m_filtered_frame.p) / dt;
+
+  KDL::Rotation rot_diff = m_filtered_frame.M.Inverse() * m_target_frame.M;
+  double angle;
+  KDL::Vector axis;
+  KDL::Vector rot_vec = rot_diff.GetRot();
+  target_twist.rot = rot_vec / dt;
+
+  // Clamp the linear and angular velocity
+  target_twist.vel.x(std::clamp(target_twist.vel.x(), -m_max_linear_velocity,
+                                m_max_linear_velocity));
+  target_twist.vel.y(std::clamp(target_twist.vel.y(), -m_max_linear_velocity,
+                                m_max_linear_velocity));
+  target_twist.vel.z(std::clamp(target_twist.vel.z(), -m_max_linear_velocity,
+                                m_max_linear_velocity));
+  target_twist.rot.x(std::clamp(target_twist.rot.x(), -m_max_angular_velocity,
+                                m_max_angular_velocity));
+  target_twist.rot.y(std::clamp(target_twist.rot.y(), -m_max_angular_velocity,
+                                m_max_angular_velocity));
+  target_twist.rot.z(std::clamp(target_twist.rot.z(), -m_max_angular_velocity,
+                                m_max_angular_velocity));
+
+  // Integrate the twist to get the new target frame
+  m_filtered_frame.p += target_twist.vel * dt;
+  m_filtered_frame.M = m_target_frame.M;
+      // KDL::Rotation::Rot(target_twist.rot, dt) * m_filtered_frame.M;
+}
 ctrl::Vector6D KukaCartesianImpedanceController::computeMotionError() {
   // Compute the cartesian error between the current and the target frame
 
@@ -185,7 +231,7 @@ void KukaCartesianImpedanceController::computeTargetPos() {
     // Compute forward kinematics
     Base::m_fk_solver->JntToCart(q, simulated_frame);
     // Compute error (logarithm map from desired frame to current)
-    KDL::Twist delta_twist = KDL::diff(simulated_frame, m_target_frame);
+    KDL::Twist delta_twist = KDL::diff(simulated_frame, m_filtered_frame);
     for (int j = 0; j < 6; ++j) {
       err(j) = delta_twist[j];
     }
@@ -227,15 +273,15 @@ void KukaCartesianImpedanceController::computeTargetPos() {
   }
   const double alpha = 0.01;
   auto new_t = alpha * q.data + (1 - alpha) * m_target_joint_position;
-  RCLCPP_INFO_STREAM(get_node()->get_logger(),
-                     "alpha: " << alpha << "| Target: " << q.data.transpose()
-                               << "| Fitered: " << new_t.transpose());
-  RCLCPP_INFO_STREAM(
-      get_node()->get_logger(),
-      "Simulated: " << simulated_frame.p.x() << " " << simulated_frame.p.y()
-                    << " " << simulated_frame.p.z() << " | vs "
-                    << m_current_frame.p.x() << " " << m_current_frame.p.y()
-                    << " " << m_current_frame.p.z());
+  // RCLCPP_INFO_STREAM(get_node()->get_logger(),
+  //                    "alpha: " << alpha << "| Target: " << q.data.transpose()
+  //                              << "| Fitered: " << new_t.transpose());
+  // RCLCPP_INFO_STREAM(
+  //     get_node()->get_logger(),
+  //     "Simulated: " << simulated_frame.p.x() << " " << simulated_frame.p.y()
+  //                   << " " << simulated_frame.p.z() << " | vs "
+  //                   << m_current_frame.p.x() << " " << m_current_frame.p.y()
+  //                   << " " << m_current_frame.p.z());
   m_target_joint_position = new_t;
 
 #if LOGGING

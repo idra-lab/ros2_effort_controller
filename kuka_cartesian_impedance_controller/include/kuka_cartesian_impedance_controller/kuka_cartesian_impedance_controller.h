@@ -78,6 +78,7 @@ private:
   void
   targetFrameCallback(const geometry_msgs::msg::PoseStamped::SharedPtr target);
   ctrl::Vector6D computeMotionError();
+  void filterTargetFrame();
 
 #if LOGGING
   void stateCallback(const lbr_fri_idl::msg::LBRState::SharedPtr state);
@@ -86,7 +87,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
       m_target_frame_subscriber;
   rclcpp::Publisher<debug_msg::msg::Debug>::SharedPtr m_data_publisher;
-  KDL::Frame m_target_frame;
+  KDL::Frame m_target_frame, m_filtered_frame;
   ctrl::VectorND m_target_joint_position;
 #if LOGGING
   XBot::MatLogger2::Ptr m_logger;
@@ -99,7 +100,8 @@ private:
 
   ctrl::MatrixND m_identity;
   ctrl::VectorND m_q_starting_pose;
-
+  double m_max_linear_velocity;
+  double m_max_angular_velocity;
   double m_vel_old = 0.0;
   double current_acc_j0 = 0.0;
   bool m_compensate_dJdq = false;
