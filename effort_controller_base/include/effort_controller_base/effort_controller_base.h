@@ -196,6 +196,8 @@ protected:
   std::string m_end_effector_link;
   std::string m_compliance_ref_link;
   std::string m_robot_base_link;
+  KDL::JntArray m_upper_pos_limits;
+  KDL::JntArray m_lower_pos_limits;
   std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>
       m_joint_state_pos_handles;
   std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>
@@ -225,6 +227,7 @@ private:
   bool m_initialized = {false};
   bool m_configured = {false};
   bool m_active = {false};
+  int m_rate;
   // joint velocity filter
   const double m_dotq_alpha = 0.3;
   // Dynamic parameters

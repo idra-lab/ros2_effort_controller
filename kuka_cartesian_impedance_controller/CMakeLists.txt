@@ -11,9 +11,8 @@ option(LOGGING "Enable logging" ON)
 add_compile_options(${ADDITIONAL_COMPILE_OPTIONS})
 
 # Build in release mode if not specified
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
-endif()
+set(CMAKE_BUILD_TYPE Release)
+
 
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 add_definitions(-DEIGEN_MPL2_ONLY)

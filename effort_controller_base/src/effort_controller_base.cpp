@@ -93,7 +93,8 @@ EffortControllerBase::on_init() {
     auto executor =
         std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
     executor->add_node(robot_description_listener);
-    while (!robot_description_listener->m_description_received_) {
+    while (!robot_description_listener->m_description_received_ &&
+           rclcpp::ok()) {
       executor->spin_some();
       RCLCPP_INFO_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
                            1000, "Waiting for robot description");
@@ -117,7 +118,8 @@ EffortControllerBase::on_configure(
   // Get kinematics specific configuration
   urdf::Model robot_model;
   KDL::Tree robot_tree;
-
+  m_rate = get_node()->get_parameter("update_rate").as_int();
+  RCLCPP_INFO(get_node()->get_logger(), "Rate: %d Hz", m_rate);
   m_robot_base_link = get_node()->get_parameter("robot_base_link").as_string();
   if (m_robot_base_link.empty()) {
     RCLCPP_ERROR(get_node()->get_logger(), "robot_base_link is empty");
@@ -187,8 +189,9 @@ EffortControllerBase::on_configure(
   m_joint_effort_limits.resize(m_joint_number);
 
   // Parse joint limits
-  KDL::JntArray upper_pos_limits(m_joint_number);
-  KDL::JntArray lower_pos_limits(m_joint_number);
+  m_upper_pos_limits.resize(m_joint_number);
+  m_lower_pos_limits.resize(m_joint_number);
+
   for (size_t i = 0; i < m_joint_number; ++i) {
     if (!robot_model.getJoint(m_joint_names[i])) {
       RCLCPP_ERROR(get_node()->get_logger(),
@@ -199,18 +202,25 @@ EffortControllerBase::on_configure(
     }
     if (robot_model.getJoint(m_joint_names[i])->type ==
         urdf::Joint::CONTINUOUS) {
-      upper_pos_limits(i) = std::nan("0");
-      lower_pos_limits(i) = std::nan("0");
+      m_upper_pos_limits(i) = std::nan("0");
+      m_lower_pos_limits(i) = std::nan("0");
       m_joint_effort_limits(i) = std::nan("0");
     } else {
       // Non-existent urdf limits are zero initialized
-      upper_pos_limits(i) =
+      m_upper_pos_limits(i) =
           robot_model.getJoint(m_joint_names[i])->limits->upper;
-      lower_pos_limits(i) =
+      m_lower_pos_limits(i) =
           robot_model.getJoint(m_joint_names[i])->limits->lower;
       m_joint_effort_limits(i) =
           robot_model.getJoint(m_joint_names[i])->limits->effort;
     }
+
+    // print limits
+    RCLCPP_INFO_STREAM(get_node()->get_logger(),
+                       "Joint " << m_joint_names[i] << ": "
+                                << "lower: " << m_lower_pos_limits(i)
+                                << ", upper: " << m_upper_pos_limits(i)
+                                << ", effort: " << m_joint_effort_limits(i));
   }
 
   // Initialize solvers
@@ -224,7 +234,7 @@ EffortControllerBase::on_configure(
   m_ik_solver_vel.reset(new KDL::ChainIkSolverVel_pinv(m_robot_chain));
 
   m_ik_solver.reset(new KDL::ChainIkSolverPos_NR_JL(
-      m_robot_chain, lower_pos_limits, upper_pos_limits, *m_fk_solver,
+      m_robot_chain, m_lower_pos_limits, m_upper_pos_limits, *m_fk_solver,
       *m_ik_solver_vel, 100, 1e-6));
 
   // m_ik_solver.reset(new KDL::ChainIkSolverPos_LMA(m_robot_chain, 1e-4, 1000,
@@ -326,15 +336,15 @@ EffortControllerBase::on_activate(
 
   // Get command handles.
   // Position
-    if (!controller_interface::get_ordered_interfaces(
-            command_interfaces_, m_joint_names,
-            hardware_interface::HW_IF_POSITION, m_joint_cmd_pos_handles)) {
-      RCLCPP_ERROR(get_node()->get_logger(),
-                   "Expected %zu '%s' command interfaces, got %zu.",
-                   m_joint_number, hardware_interface::HW_IF_POSITION,
-                   m_joint_cmd_pos_handles.size());
-      return CallbackReturn::ERROR;
-    }
+  if (!controller_interface::get_ordered_interfaces(
+          command_interfaces_, m_joint_names,
+          hardware_interface::HW_IF_POSITION, m_joint_cmd_pos_handles)) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+                 "Expected %zu '%s' command interfaces, got %zu.",
+                 m_joint_number, hardware_interface::HW_IF_POSITION,
+                 m_joint_cmd_pos_handles.size());
+    return CallbackReturn::ERROR;
+  }
   RCLCPP_INFO(get_node()->get_logger(), "Finished getting command interfaces");
   // Get state handles.
   // Position
@@ -371,9 +381,27 @@ EffortControllerBase::on_activate(
 
 void EffortControllerBase::writeJointEffortCmds(
     ctrl::VectorND &target_joint_positions) {
-    for (size_t i = 0; i < m_joint_number; ++i) {
-      m_joint_cmd_pos_handles[i].get().set_value(target_joint_positions(i));
+  const double max_velocity = 2 * 0.001309; // rad/s
+  const double eps = 1e-4;
+  for (size_t i = 0; i < m_joint_number; ++i) {
+    // enforce joint limits
+    if (target_joint_positions(i) + 2 * max_velocity > m_upper_pos_limits(i)) {
+      // set equal to current
+      target_joint_positions(i) = m_upper_pos_limits(i) - 2 * max_velocity - eps;
+      // RCLCPP_INFO(get_node()->get_logger(),
+      //             "Joint %s target is out of limits, setting to %f",
+      //             m_joint_names[i].c_str(), m_joint_positions(i));
+    } else if (target_joint_positions(i) - 2 * max_velocity <
+               m_lower_pos_limits(i)) {
+      // set equal to current
+      target_joint_positions(i) = m_lower_pos_limits(i) + 2 * max_velocity + eps;
+      // RCLCPP_INFO(get_node()->get_logger(),
+      //             "Joint %s target is out of limits, setting to %f",
+      //             m_joint_names[i].c_str(), m_joint_positions(i));
     }
+
+    m_joint_cmd_pos_handles[i].get().set_value(target_joint_positions(i));
+  }
 }
 
 void EffortControllerBase::computeIKSolution(
