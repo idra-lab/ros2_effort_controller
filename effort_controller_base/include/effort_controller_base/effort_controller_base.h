@@ -180,6 +180,8 @@ protected:
   std::shared_ptr<KDL::TreeFkSolverPos_recursive> m_forward_kinematics_solver;
   std::shared_ptr<KDL::ChainFkSolverPos_recursive> m_fk_solver;
   std::shared_ptr<KDL::ChainIkSolverPos_NR_JL> m_ik_solver;
+  KDL::JntArray m_q_ns; 
+  KDL::JntArray m_weights;
 
   std::shared_ptr<KDL::ChainIkSolverVel_pinv_nso> m_ik_solver_vel_nso;
 
