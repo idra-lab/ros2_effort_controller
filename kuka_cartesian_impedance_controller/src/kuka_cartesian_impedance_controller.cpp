@@ -37,6 +37,7 @@ KukaCartesianImpedanceController::on_configure(
                  CallbackReturn::SUCCESS) {
     return ret;
   }
+  m_identity = ctrl::MatrixND::Identity(Base::m_joint_number, Base::m_joint_number);
 
   m_target_frame_subscriber =
       get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -345,7 +346,7 @@ void KukaCartesianImpedanceController::computeTargetPos() {
 
   // CLIK parameters
   const double eps = 2e-4;
-  const int IT_MAX = 50;
+  const int IT_MAX = 100;
   const double DT = 0.1;
 
   typedef Eigen::Matrix<double, 6, 1> Vector6d;
