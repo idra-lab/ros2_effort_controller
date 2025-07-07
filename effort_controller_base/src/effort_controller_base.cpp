@@ -235,13 +235,15 @@ EffortControllerBase::on_configure(
   m_forward_kinematics_solver.reset(new KDL::TreeFkSolverPos_recursive(tmp));
   m_fk_solver.reset(new KDL::ChainFkSolverPos_recursive(m_robot_chain));
 
-  m_q_ns(0) = -0.57;
-  m_q_ns(1) = 0.38;
-  m_q_ns(2) = 0.12;
-  m_q_ns(3) = -1.5;
-  m_q_ns(4) = -0.26;
-  m_q_ns(5) = 0.89;
-  m_q_ns(6) = 0.0;
+  auto deg2rad = [](double deg) { return deg * M_PI / 180.0; };
+
+  m_q_ns(0) = deg2rad(0.0);
+  m_q_ns(1) = deg2rad(40.0);
+  m_q_ns(2) = deg2rad(0.0);
+  m_q_ns(3) = deg2rad(-72.6);
+  m_q_ns(4) = deg2rad(0.0);
+  m_q_ns(5) = deg2rad(80.05);
+  m_q_ns(6) = deg2rad(0.0);
   
   m_weights(0) = 1.0;
   m_weights(1) = 1.0;
@@ -250,25 +252,6 @@ EffortControllerBase::on_configure(
   m_weights(4) = 1.0;
   m_weights(5) = 1.0;
   m_weights(6) = 1.0;
-
-  m_ik_solver_vel_nso.reset(
-      new KDL::ChainIkSolverVel_pinv_nso(m_robot_chain, m_q_ns, m_weights));
-
-      m_ik_solver_vel.reset(new KDL::ChainIkSolverVel_pinv(m_robot_chain));
-
-  m_ik_solver.reset(new KDL::ChainIkSolverPos_NR_JL(
-      m_robot_chain, m_lower_pos_limits, m_upper_pos_limits, *m_fk_solver,
-      *m_ik_solver_vel_nso, 1000, 1e-6));
-
-  // m_ik_solver.reset(new KDL::ChainIkSolverPos_LMA(m_robot_chain, 1e-4, 1000,
-  // 1e-6));
-
-
-
-  m_jnt_to_jac_solver.reset(new KDL::ChainJntToJacSolver(m_robot_chain));
-  m_dyn_solver.reset(new KDL::ChainDynParam(m_robot_chain, grav));
-  RCLCPP_INFO(get_node()->get_logger(),
-              "Finished initializing kinematics solvers");
 
   RCLCPP_INFO_STREAM(get_node()->get_logger(), "Robot Chain: ");
   for (unsigned int i = 0; i < m_robot_chain.getNrOfSegments(); ++i) {
@@ -402,21 +385,6 @@ void EffortControllerBase::writeJointEffortCmds(
 
     m_joint_cmd_pos_handles[i].get().set_value(target_joint_positions(i));
   }
-}
-
-void EffortControllerBase::computeIKSolution(
-    const KDL::Frame &desired_pose, ctrl::VectorND &simulated_joint_positions) {
-  // Invese kinematics
-  int ret = m_ik_solver->CartToJnt(m_joint_positions, desired_pose,
-                                   m_simulated_joint_motion);
-
-  // Check if solution was found
-  if (ret < 0) {
-    RCLCPP_ERROR(get_node()->get_logger(), "Could not find IK solution");
-    return;
-  }
-
-  simulated_joint_positions = m_simulated_joint_motion.data;
 }
 
 ctrl::Vector6D

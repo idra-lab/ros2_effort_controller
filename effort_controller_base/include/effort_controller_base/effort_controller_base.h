@@ -12,13 +12,8 @@
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 #include <kdl/chain.hpp>
-#include <kdl/chaindynparam.hpp>
 #include <kdl/chainfksolverpos_recursive.hpp>
-#include <kdl/chainfksolvervel_recursive.hpp>
-#include <kdl/chainiksolverpos_lma.hpp>
-#include <kdl/chainiksolverpos_nr_jl.hpp>
-#include <kdl/chainiksolvervel_pinv.hpp>
-#include <kdl/chainiksolvervel_pinv_nso.hpp>
+#include <kdl/chainjnttojacsolver.hpp>
 #include <kdl/frames.hpp>
 #include <kdl/jacobian.hpp>
 #include <kdl/jntarray.hpp>
@@ -179,20 +174,12 @@ protected:
   std::shared_ptr<KDL::ChainJntToJacSolver> m_jnt_to_jac_solver;
   std::shared_ptr<KDL::TreeFkSolverPos_recursive> m_forward_kinematics_solver;
   std::shared_ptr<KDL::ChainFkSolverPos_recursive> m_fk_solver;
-  std::shared_ptr<KDL::ChainIkSolverPos_NR_JL> m_ik_solver;
   KDL::JntArray m_q_ns; 
   KDL::JntArray m_weights;
-
-  std::shared_ptr<KDL::ChainIkSolverVel_pinv_nso> m_ik_solver_vel_nso;
-
-  std::shared_ptr<KDL::ChainIkSolverVel_pinv> m_ik_solver_vel;
-  std::shared_ptr<KDL::ChainDynParam> m_dyn_solver;
 
   /**
    * @brief Allow users to choose the IK solver type on startup
    */
-  // std::shared_ptr<pluginlib::ClassLoader<IKSolver> > m_solver_loader;
-  // std::shared_ptr<IKSolver> m_ik_solver;
 
   // Dynamic parameters
   std::string m_end_effector_link;
@@ -239,7 +226,6 @@ private:
   KDL::JntArray m_joint_effort_limits;
   double m_delta_tau_max;
 
-  bool m_kuka_hw;
 };
 
 } // namespace effort_controller_base
