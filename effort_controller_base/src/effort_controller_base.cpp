@@ -188,6 +188,10 @@ EffortControllerBase::on_configure(
   // Initialize effort limits
   m_joint_effort_limits.resize(m_joint_number);
 
+  // initialize postural task
+  m_q_ns.resize(m_joint_number);
+  m_weights.resize(m_joint_number);
+
   // Parse joint limits
   m_upper_pos_limits.resize(m_joint_number);
   m_lower_pos_limits.resize(m_joint_number);
@@ -231,39 +235,23 @@ EffortControllerBase::on_configure(
   m_forward_kinematics_solver.reset(new KDL::TreeFkSolverPos_recursive(tmp));
   m_fk_solver.reset(new KDL::ChainFkSolverPos_recursive(m_robot_chain));
 
-  m_ik_solver_vel.reset(new KDL::ChainIkSolverVel_pinv(m_robot_chain));
+  auto deg2rad = [](double deg) { return deg * M_PI / 180.0; };
 
-  m_ik_solver.reset(new KDL::ChainIkSolverPos_NR_JL(
-      m_robot_chain, m_lower_pos_limits, m_upper_pos_limits, *m_fk_solver,
-      *m_ik_solver_vel, 100, 1e-6));
-
-  // m_ik_solver.reset(new KDL::ChainIkSolverPos_LMA(m_robot_chain, 1e-4, 1000,
-  // 1e-6));
-
-  KDL::JntArray q_ns(m_joint_number), weights(m_joint_number);
-  q_ns(0) = 0.0;
-  q_ns(1) = 0.78;
-  q_ns(2) = 0.0;
-  q_ns(3) = -1.57;
-  q_ns(4) = 0.0;
-  q_ns(5) = -0.78;
-  q_ns(6) = 0.0;
-
-  weights(0) = 1.0;
-  weights(1) = 1.0;
-  weights(2) = 1.0;
-  weights(3) = 1.0;
-  weights(4) = 1.0;
-  weights(5) = 1.0;
-  weights(6) = 1.0;
-
-  m_ik_solver_vel_nso.reset(
-      new KDL::ChainIkSolverVel_pinv_nso(m_robot_chain, q_ns, weights));
-
-  m_jnt_to_jac_solver.reset(new KDL::ChainJntToJacSolver(m_robot_chain));
-  m_dyn_solver.reset(new KDL::ChainDynParam(m_robot_chain, grav));
-  RCLCPP_INFO(get_node()->get_logger(),
-              "Finished initializing kinematics solvers");
+  m_q_ns(0) = deg2rad(0.0);
+  m_q_ns(1) = deg2rad(40.0);
+  m_q_ns(2) = deg2rad(0.0);
+  m_q_ns(3) = deg2rad(-72.6);
+  m_q_ns(4) = deg2rad(0.0);
+  m_q_ns(5) = deg2rad(80.05);
+  m_q_ns(6) = deg2rad(0.0);
+  
+  m_weights(0) = 1.0;
+  m_weights(1) = 1.0;
+  m_weights(2) = 1.0;
+  m_weights(3) = 1.0; 
+  m_weights(4) = 1.0;
+  m_weights(5) = 1.0;
+  m_weights(6) = 1.0;
 
   RCLCPP_INFO_STREAM(get_node()->get_logger(), "Robot Chain: ");
   for (unsigned int i = 0; i < m_robot_chain.getNrOfSegments(); ++i) {
@@ -303,6 +291,7 @@ EffortControllerBase::on_configure(
   m_old_joint_velocities.resize(m_joint_number);
   m_old_joint_velocities.data.setZero();
   m_simulated_joint_motion.resize(m_joint_number);
+
 
   RCLCPP_INFO(get_node()->get_logger(), "Finished Base on_configure");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
@@ -388,35 +377,14 @@ void EffortControllerBase::writeJointEffortCmds(
     if (target_joint_positions(i) + 2 * max_velocity > m_upper_pos_limits(i)) {
       // set equal to current
       target_joint_positions(i) = m_upper_pos_limits(i) - 2 * max_velocity - eps;
-      // RCLCPP_INFO(get_node()->get_logger(),
-      //             "Joint %s target is out of limits, setting to %f",
-      //             m_joint_names[i].c_str(), m_joint_positions(i));
     } else if (target_joint_positions(i) - 2 * max_velocity <
                m_lower_pos_limits(i)) {
       // set equal to current
       target_joint_positions(i) = m_lower_pos_limits(i) + 2 * max_velocity + eps;
-      // RCLCPP_INFO(get_node()->get_logger(),
-      //             "Joint %s target is out of limits, setting to %f",
-      //             m_joint_names[i].c_str(), m_joint_positions(i));
     }
 
     m_joint_cmd_pos_handles[i].get().set_value(target_joint_positions(i));
   }
-}
-
-void EffortControllerBase::computeIKSolution(
-    const KDL::Frame &desired_pose, ctrl::VectorND &simulated_joint_positions) {
-  // Invese kinematics
-  int ret = m_ik_solver->CartToJnt(m_joint_positions, desired_pose,
-                                   m_simulated_joint_motion);
-
-  // Check if solution was found
-  if (ret < 0) {
-    RCLCPP_ERROR(get_node()->get_logger(), "Could not find IK solution");
-    return;
-  }
-
-  simulated_joint_positions = m_simulated_joint_motion.data;
 }
 
 ctrl::Vector6D

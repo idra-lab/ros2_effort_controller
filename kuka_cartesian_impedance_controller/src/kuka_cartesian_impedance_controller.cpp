@@ -1,5 +1,5 @@
+#include <fstream>
 #include <kuka_cartesian_impedance_controller/kuka_cartesian_impedance_controller.h>
-
 namespace kuka_cartesian_impedance_controller {
 
 KukaCartesianImpedanceController::KukaCartesianImpedanceController()
@@ -76,6 +76,7 @@ KukaCartesianImpedanceController::on_configure(
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
       CallbackReturn::SUCCESS;
 }
+
 #if LOGGING
 void KukaCartesianImpedanceController::stateCallback(
     const lbr_fri_idl::msg::LBRState::SharedPtr state) {
@@ -104,8 +105,16 @@ KukaCartesianImpedanceController::on_activate(
   m_target_joint_position = Base::m_joint_positions.data;
 
   m_q_starting_pose = Base::m_joint_positions.data;
+  RCLCPP_INFO_STREAM(
+      get_node()->get_logger(),
+      "Starting configuration: " << m_q_starting_pose.transpose());
+  double roll, pitch, yaw;
+  m_current_frame.M.GetRPY(roll, pitch, yaw);
   RCLCPP_INFO_STREAM(get_node()->get_logger(),
-                     "Starting pose: " << m_q_starting_pose.transpose());
+                     "Current frame: " << m_current_frame.p.x() << ", "
+                                       << m_current_frame.p.y() << ", "
+                                       << m_current_frame.p.z() << ", " << roll
+                                       << ", " << pitch << ", " << yaw);
   // m_q_starting_pose[0] = 0.0;
   // m_q_starting_pose[1] = 0.0;
   // m_q_starting_pose[2] = 0.0;
@@ -142,115 +151,18 @@ KukaCartesianImpedanceController::on_deactivate(
 controller_interface::return_type
 KukaCartesianImpedanceController::update(const rclcpp::Time &time,
                                          const rclcpp::Duration &period) {
-
-  // const double time1 = get_node()->get_clock()->now().seconds();
-
   // Update joint states
   Base::updateJointStates();
 
-  // const double time2 = get_node()->get_clock()->now().seconds();
-
-  // filterMaximumForce();
-
   filterTargetFrame();
-
-  // const double time3 = get_node()->get_clock()->now().seconds();
 
   computeTargetPos();
 
-  // const double time4 = get_node()->get_clock()->now().seconds();
-  // Write final commands to the hardware interface
   Base::writeJointEffortCmds(m_target_joint_position);
-
-  // const double time5 = get_node()->get_clock()->now().seconds();
-
-  // const double time_end = get_node()->get_clock()->now().seconds();
-  // if(time_end - time1 > 0.0009){
-  //   RCLCPP_WARN(get_node()->get_logger(), "%f || TIME WARNING: %f | %f | %f |
-  //   %f",time_end - time1, time2 - time1, time3 - time2, time4- time3, time5 -
-  //   time4);
-  // }
 
   return controller_interface::return_type::OK;
 }
-void KukaCartesianImpedanceController::filterMaximumForce() {
 
-  // KDL::Frame error_kdl;
-  // Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame);
-  // error_kdl.p = m_target_frame.p - m_current_frame.p;
-  // error_kdl.M = m_target_frame.M * m_current_frame.M.Inverse();
-
-  // KDL::Vector rot_axis = KDL::Vector::Zero();
-  // double angle = error_kdl.M.GetRotAngle(rot_axis); // rot_axis is normalized
-  // rot_axis = rot_axis * angle;
-  // ctrl::Vector6D error;
-  // error(0) = error_kdl.p.x();
-  // error(1) = error_kdl.p.y();
-  // error(2) = error_kdl.p.z();
-  // error(3) = rot_axis(0);
-  // error(4) = rot_axis(1);
-  // error(5) = rot_axis(2);
-
-  // Eigen::Matrix3d m_stiffness = Eigen::Matrix<double, 3, 3>::Zero();
-  // m_stiffness.diagonal() << 1000.0, 1000.0, 1000.0;
-
-  // Eigen::Matrix3d m_damping = Eigen::Matrix<double, 3, 3>::Zero();
-  // double csi = 1.0;
-  // m_damping.diagonal() << 2 * csi * sqrt(m_stiffness(0, 0)),
-  //     2 * csi * sqrt(m_stiffness(1, 1)), 2 * csi * sqrt(m_stiffness(2, 2));
-
-  // // Compute the Jacobian
-  // KDL::Jacobian J;
-  // J.resize(Base::m_joint_number);
-
-  // KDL::JntArray q(Base::m_joint_number);
-  // q.data = Base::m_joint_positions.data;
-
-  // ctrl::VectorND q_dot = Base::m_joint_velocities.data;
-  // Base::m_jnt_to_jac_solver->JntToJac(q, J);
-
-  // Eigen::Vector3d Fmax(15.0, 15.0, 15.0);
-
-  // Eigen::Vector3d error_p(error_kdl.p.x(), error_kdl.p.y(), error_kdl.p.z());
-  // Eigen::Vector3d f =
-  //     m_stiffness * error_p - m_damping * J.data.topRows(3) * q_dot;
-  // RCLCPP_INFO_STREAM_THROTTLE(get_node()->get_logger(),
-  // *get_node()->get_clock(), 500, "Imp Force: " << f.transpose());
-
-  // Eigen::Vector3d e_max =
-  //     (Fmax + m_damping * J.data.topRows(3) * q_dot) / m_stiffness(0, 0);
-
-  // Compute norms
-  // double error_norm = error_p.norm();
-  // double e_max_norm = e_max.norm();
-
-  // Scale error_p if it exceeds e_max_norm
-  // error_p(0) = std::clamp(error_p(0), -e_max(0), e_max(0));
-  // error_p(1) = std::clamp(error_p(1), -e_max(1), e_max(1));
-  // error_p(2) = std::clamp(error_p(2), -e_max(2), e_max(2));
-
-  // Set the filtered position error back to error_kdl.p
-  // m_filtered_frame.p = KDL::Vector(m_current_frame.p.x() + error_p.x(),
-  //                                  m_current_frame.p.y() + error_p.y(),
-  //                                  m_current_frame.p.z() + error_p.z());
-  // m_filtered_frame.M = m_target_frame.M;
-  // Eigen::Vector3d new_error(error_p.x(), error_p.y(), error_p.z());
-  // Eigen::Vector3d new_force =
-  //     m_stiffness * new_error - m_damping * J.data.topRows(3) * q_dot;
-
-  // create wrench message
-  // m_wrench_msg.header.stamp = get_node()->now();
-  // m_wrench_msg.wrench.force.x = new_force(0);
-  // m_wrench_msg.wrench.force.y = new_force(1);
-  // m_wrench_msg.wrench.force.z = new_force(2);
-  // m_wrench_msg.wrench.torque.x = 0.0;
-  // m_wrench_msg.wrench.torque.y = 0.0;
-  // m_wrench_msg.wrench.torque.z = 0.0;
-  // m_wrench_publisher->publish(m_wrench_msg);
-  // RCLCPP_INFO_STREAM_THROTTLE(get_node()->get_logger(),
-  //                             *get_node()->get_clock(), 500,
-  //                             "Filtered Force: " << new_force.transpose());
-}
 
 void KukaCartesianImpedanceController::filterTargetFrame() {
   if (KDL::Equal(m_target_frame, m_filtered_frame, 1e-3)) {
@@ -333,102 +245,105 @@ ctrl::Vector6D KukaCartesianImpedanceController::computeMotionError() {
 void KukaCartesianImpedanceController::computeTargetPos() {
   Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame);
   KDL::Frame simulated_frame = m_current_frame;
-  Eigen::MatrixXd JJt;
+  // ctrl::Matrix6D JJt =
+  //     ctrl::Matrix6D::Zero(Base::m_joint_number, Base::m_joint_number);
   KDL::Jacobian J(Base::m_joint_number);
 
-  KDL::JntArray q(Base::m_joint_number);
-  q.data = Base::m_joint_positions.data;
+  KDL::JntArray q_clik(Base::m_joint_number);
+  q_clik.data = Base::m_joint_positions.data;
+
+  ctrl::VectorND q_kdl(Base::m_joint_number);
 
   KDL::JntArray dq(Base::m_joint_number);
   dq.data.setZero();
 
   // CLIK (closed loop inverse kinematics) algorithm
 
+  ctrl::VectorND ns_task;
   // CLIK parameters
   const double eps = 2e-4;
-  const int IT_MAX = 100;
-  const double DT = 0.1;
-
+  const int IT_MAX = 50;
+  const double DT = 0.05;
+  const double eps_grad_ns = 1e-3;
+  const double ns_gain = 0.05;
   typedef Eigen::Matrix<double, 6, 1> Vector6d;
   Vector6d err, dq_vec;
-
+  ctrl::VectorND ns_err(Base::m_joint_number), ns_err_old(Base::m_joint_number);
   // Pre-allocate everything outside the loop
-  ctrl::MatrixND J_pinv(Base::m_joint_number,
-                        6); // assuming shape [n_joints x 6]
+  ctrl::MatrixND J_pinv(Base::m_joint_number, 6);
   KDL::Twist delta_twist;
   int i = 0, j = 0;
-  for (i = 0;; i++) {
+  ns_err.setZero();
+  ns_err_old.setZero();
+  const double damp = 1e-6;
+
+  do {
     // Compute forward kinematics
-    Base::m_fk_solver->JntToCart(q, simulated_frame);
+    Base::m_fk_solver->JntToCart(q_clik, simulated_frame);
+    ns_err = Base::m_q_ns.data - q_clik.data;
+
     // Compute error
     delta_twist = KDL::diff(simulated_frame, m_filtered_frame);
     for (j = 0; j < 6; ++j) {
       err(j) = delta_twist[j];
     }
-    // Check for convergence
-    if (err.norm() < eps) {
-      break;
-    }
-    if (i >= IT_MAX) {
-      // RCLCPP_WARN_STREAM(get_node()->get_logger(),
-      //                    "CLIK reached max iterarion -> final_error: " <<
-      //                    err.norm());
-      break;
-    }
-
     // Compute the Jacobian at the current confiation
-    Base::m_jnt_to_jac_solver->JntToJac(q, J);
+    Base::m_jnt_to_jac_solver->JntToJac(q_clik, J);
     // Compute the damped pseudo-inverse of the Jacobian
     pseudoInverse(J.data, &J_pinv);
     // 6. Compute dq = J⁺ * err + (I - J⁺J)(q0 - q) / dt
-    dq.data = J_pinv * err + (m_identity - J_pinv * J.data) *
-                                 (m_q_starting_pose - q.data) / DT;
+    ns_task = ns_gain * (m_identity - J_pinv * J.data) * ns_err;
+    dq.data = J_pinv * err + ns_task; // / DT;
 
     // Integrate joint velocities (Euler integration)
     for (j = 0; j < Base::m_joint_number; j++) {
-      q(j) += dq.data(j) * DT;
+      q_clik(j) += dq.data(j) * DT;
     }
-  }
+    i++;
+  } while (i < IT_MAX && err.norm() > eps);
 
-  const double alpha = 0.01;
-  auto filtered_q = alpha * q.data + (1 - alpha) * m_target_joint_position;
+  const double alpha = 1.0;
+  auto filtered_q = alpha * q_clik.data + (1 - alpha) * m_target_joint_position;
   m_target_joint_position = filtered_q;
+  // m_target_joint_position = m_q_starting_pose;
 
 #if LOGGING
-  if (m_received_target_frame) {
-    m_logger->add("time_sec", get_node()->get_clock()->now().seconds());
-    m_logger->add("time_nsec", get_node()->get_clock()->now().nanoseconds());
-    // add cartesian traj
-    m_logger->add("cart_target_x", m_target_frame.p.x());
-    m_logger->add("cart_target_y", m_target_frame.p.y());
-    m_logger->add("cart_target_z", m_target_frame.p.z());
-    Eigen::Matrix<double, 3, 3> rot_des(m_target_frame.M.data);
-    m_logger->add("cart_target_M", rot_des);
-    m_logger->add("cart_measured_x", m_current_frame.p.x());
-    m_logger->add("cart_measured_y", m_current_frame.p.y());
-    m_logger->add("cart_measured_z", m_current_frame.p.z());
-    Eigen::Matrix<double, 3, 3> M_c(m_current_frame.M.data);
-    m_logger->add("cart_measured_M", M_c);
-    // solver outcome
-    m_logger->add("joint_measured", Base::m_joint_positions.data);
-    m_logger->add("joint_target_IK", q.data);
-    m_logger->add("joint_target_filtered", m_target_joint_position);
+  // if (m_received_target_frame) {
+  m_logger->add("time_sec", get_node()->get_clock()->now().seconds());
+  m_logger->add("time_nsec", get_node()->get_clock()->now().nanoseconds());
+  // add cartesian traj
+  m_logger->add("cart_target_x", m_target_frame.p.x());
+  m_logger->add("cart_target_y", m_target_frame.p.y());
+  m_logger->add("cart_target_z", m_target_frame.p.z());
+  Eigen::Matrix<double, 3, 3> rot_des(m_target_frame.M.data);
+  m_logger->add("cart_target_M", rot_des);
+  m_logger->add("cart_measured_x", m_current_frame.p.x());
+  m_logger->add("cart_measured_y", m_current_frame.p.y());
+  m_logger->add("cart_measured_z", m_current_frame.p.z());
+  Eigen::Matrix<double, 3, 3> M_c(m_current_frame.M.data);
+  m_logger->add("cart_measured_M", M_c);
+  // solver outcome
+  m_logger->add("joint_measured", Base::m_joint_positions.data);
+  m_logger->add("joint_target_IK_kdl", q_kdl);
+  m_logger->add("joint_target_filtered_kdl", m_target_joint_position);
+  m_logger->add("joint_target_clik", q_clik.data);
 
-    std::vector<double> measured_torque(std::begin(m_state.measured_torque),
-                                        std::end(m_state.measured_torque));
-    m_logger->add("measured_torque", measured_torque);
-    std::vector<double> commanded_torque(std::begin(m_state.commanded_torque),
-                                         std::end(m_state.commanded_torque));
-    m_logger->add("commanded_torque", commanded_torque);
+  std::vector<double> measured_torque(std::begin(m_state.measured_torque),
+                                      std::end(m_state.measured_torque));
+  m_logger->add("measured_torque", measured_torque);
+  std::vector<double> commanded_torque(std::begin(m_state.commanded_torque),
+                                       std::end(m_state.commanded_torque));
+  m_logger->add("commanded_torque", commanded_torque);
+  m_logger->add("ns_task", ns_task);
 
-    auto compute_condition_number = [](const Eigen::MatrixXd &matrix) {
-      Eigen::JacobiSVD<Eigen::MatrixXd> svd(matrix);
-      Eigen::VectorXd singular_values = svd.singularValues();
-      return singular_values(0) / singular_values(singular_values.size() - 1);
-    };
-    m_logger->add("condition_number_jac", compute_condition_number(J.data));
-    // m_logger->flush_available_data();
-  }
+  auto compute_condition_number = [](const Eigen::MatrixXd &matrix) {
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(matrix);
+    Eigen::VectorXd singular_values = svd.singularValues();
+    return singular_values(0) / singular_values(singular_values.size() - 1);
+  };
+  // m_logger->add("condition_number_jac", compute_condition_number(J.data));
+  // m_logger->flush_available_data();
+  // }
 #endif
 }
 

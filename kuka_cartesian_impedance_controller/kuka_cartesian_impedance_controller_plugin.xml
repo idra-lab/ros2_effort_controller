@@ -4,9 +4,7 @@
          type="kuka_cartesian_impedance_controller::KukaCartesianImpedanceController"
          base_class_type="controller_interface::ControllerInterface">
     <description>
-      Steer your robot's end-effector with forces and torques.
-      It's ideal for teleoperation with contacts.
+      Cartesian impedance control for FRI implemented with closed-loop inverse kinematics (CLIK).
     </description>
   </class>
-
 </library>
