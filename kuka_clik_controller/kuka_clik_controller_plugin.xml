@@ -1,0 +1,10 @@
+<library path="kuka_clik_controller">
+
+  <class name="kuka_clik_controller/KukaClikController"
+         type="kuka_clik_controller::KukaClikController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Closed loop inverse kinematics control for FRI used for both position and impedance control.
+    </description>
+  </class>
+</library>

@@ -1,19 +1,17 @@
 #include <fstream>
-#include <kuka_cartesian_impedance_controller/kuka_cartesian_impedance_controller.h>
-namespace kuka_cartesian_impedance_controller {
+#include <kuka_clik_controller/kuka_clik_controller.h>
+namespace kuka_clik_controller {
 
-KukaCartesianImpedanceController::KukaCartesianImpedanceController()
-    : Base::EffortControllerBase(), m_hand_frame_control(true) {}
+KukaClikController::KukaClikController()
+    : Base::ControllerBase(), m_hand_frame_control(true) {}
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-KukaCartesianImpedanceController::on_init() {
+KukaClikController::on_init() {
   const auto ret = Base::on_init();
   if (ret != rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
                  CallbackReturn::SUCCESS) {
     return ret;
   }
-  // m_max_impedance_force =
-  //     get_node()->get_parameter("max_impedance_force").as_double();
   m_max_linear_velocity =
       get_node()->get_parameter("max_linear_velocity").as_double();
   m_max_angular_velocity =
@@ -30,35 +28,31 @@ KukaCartesianImpedanceController::on_init() {
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-KukaCartesianImpedanceController::on_configure(
+KukaClikController::on_configure(
     const rclcpp_lifecycle::State &previous_state) {
   const auto ret = Base::on_configure(previous_state);
   if (ret != rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
                  CallbackReturn::SUCCESS) {
     return ret;
   }
-  m_identity = ctrl::MatrixND::Identity(Base::m_joint_number, Base::m_joint_number);
+  m_identity =
+      ctrl::MatrixND::Identity(Base::m_joint_number, Base::m_joint_number);
 
   m_target_frame_subscriber =
       get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
           get_node()->get_name() + std::string("/target_frame"), 3,
-          std::bind(&KukaCartesianImpedanceController::targetFrameCallback,
-                    this, std::placeholders::_1));
+          std::bind(&KukaClikController::targetFrameCallback, this,
+                    std::placeholders::_1));
 
   m_data_publisher = get_node()->create_publisher<debug_msg::msg::Debug>(
       get_node()->get_name() + std::string("/data"), 1);
-
-  // m_wrench_publisher =
-  // get_node()->create_publisher<geometry_msgs::msg::WrenchStamped>(
-  //     get_node()->get_name() + std::string("/impedance_wrench"), 1);
-  m_wrench_msg.header.frame_id = Base::m_end_effector_link;
 
 #if LOGGING
   XBot::MatLogger2::Options opt;
   opt.default_buffer_size = 5e8; // set default buffer size
   // opt.enable_compression = true;
   RCLCPP_INFO(get_node()->get_logger(), "\n\nCreating logger\n\n");
-  m_logger = XBot::MatLogger2::MakeLogger("/tmp/cart_impedance.mat", opt);
+  m_logger = XBot::MatLogger2::MakeLogger("/tmp/controller_log.mat", opt);
   // m_logger->set_buffer_mode(XBot::VariableBuffer::Mode::circular_buffer);
   m_logger_appender = XBot::MatAppender::MakeInstance();
   m_logger_appender->add_logger(m_logger);
@@ -68,7 +62,7 @@ KukaCartesianImpedanceController::on_configure(
   m_state_subscriber =
       get_node()->create_subscription<lbr_fri_idl::msg::LBRState>(
           "/lbr/state", 1,
-          std::bind(&KukaCartesianImpedanceController::stateCallback, this,
+          std::bind(&KukaClikController::stateCallback, this,
                     std::placeholders::_1));
 #endif
 
@@ -78,7 +72,7 @@ KukaCartesianImpedanceController::on_configure(
 }
 
 #if LOGGING
-void KukaCartesianImpedanceController::stateCallback(
+void KukaClikController::stateCallback(
     const lbr_fri_idl::msg::LBRState::SharedPtr state) {
   m_state = *state;
   // m_logger->add("commanded_torque:", state->commanded_torque.data);
@@ -87,8 +81,7 @@ void KukaCartesianImpedanceController::stateCallback(
 #endif
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-KukaCartesianImpedanceController::on_activate(
-    const rclcpp_lifecycle::State &previous_state) {
+KukaClikController::on_activate(const rclcpp_lifecycle::State &previous_state) {
   Base::on_activate(previous_state);
 
   // Update joint states
@@ -104,10 +97,6 @@ KukaCartesianImpedanceController::on_activate(
 
   m_target_joint_position = Base::m_joint_positions.data;
 
-  m_q_starting_pose = Base::m_joint_positions.data;
-  RCLCPP_INFO_STREAM(
-      get_node()->get_logger(),
-      "Starting configuration: " << m_q_starting_pose.transpose());
   double roll, pitch, yaw;
   m_current_frame.M.GetRPY(roll, pitch, yaw);
   RCLCPP_INFO_STREAM(get_node()->get_logger(),
@@ -115,16 +104,6 @@ KukaCartesianImpedanceController::on_activate(
                                        << m_current_frame.p.y() << ", "
                                        << m_current_frame.p.z() << ", " << roll
                                        << ", " << pitch << ", " << yaw);
-  // m_q_starting_pose[0] = 0.0;
-  // m_q_starting_pose[1] = 0.0;
-  // m_q_starting_pose[2] = 0.0;
-  // m_q_starting_pose[3] = -1.57;
-  // m_q_starting_pose[4] = 0.0;
-  // m_q_starting_pose[5] = 1.57;
-  // m_q_starting_pose[6] = 2.0;
-
-  m_target_wrench = ctrl::Vector6D::Zero();
-
   m_last_time = get_node()->get_clock()->now().seconds();
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
@@ -132,7 +111,7 @@ KukaCartesianImpedanceController::on_activate(
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-KukaCartesianImpedanceController::on_deactivate(
+KukaClikController::on_deactivate(
     const rclcpp_lifecycle::State &previous_state) {
   // call logger destructor
 #if LOGGING
@@ -141,7 +120,6 @@ KukaCartesianImpedanceController::on_deactivate(
 #endif
   // Stop drifting by sending zero joint velocities
   Base::computeJointEffortCmds(ctrl::Vector6D::Zero());
-  // Base::writeJointEffortCmds(ctrl::VectorND::Zero());
   Base::on_deactivate(previous_state);
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
@@ -149,22 +127,21 @@ KukaCartesianImpedanceController::on_deactivate(
 }
 
 controller_interface::return_type
-KukaCartesianImpedanceController::update(const rclcpp::Time &time,
-                                         const rclcpp::Duration &period) {
+KukaClikController::update(const rclcpp::Time &time,
+                           const rclcpp::Duration &period) {
   // Update joint states
   Base::updateJointStates();
 
   filterTargetFrame();
 
-  computeTargetPos();
+  computeTargetConfiguration();
 
-  Base::writeJointEffortCmds(m_target_joint_position);
+  Base::writeJointCmds(m_target_joint_position);
 
   return controller_interface::return_type::OK;
 }
 
-
-void KukaCartesianImpedanceController::filterTargetFrame() {
+void KukaClikController::filterTargetFrame() {
   if (KDL::Equal(m_target_frame, m_filtered_frame, 1e-3)) {
     return;
   }
@@ -205,7 +182,7 @@ void KukaCartesianImpedanceController::filterTargetFrame() {
     m_filtered_frame.M = m_filtered_frame.M * KDL::Rotation::Rot(axis, angle);
   }
 }
-ctrl::Vector6D KukaCartesianImpedanceController::computeMotionError() {
+ctrl::Vector6D KukaClikController::computeMotionError() {
   // Compute the cartesian error between the current and the target frame
 
   // Transformation from target -> current corresponds to error = target -
@@ -222,9 +199,7 @@ ctrl::Vector6D KukaCartesianImpedanceController::computeMotionError() {
 
   // Clamp maximal tolerated error.
   // The remaining error will be handled in the next control cycle.
-  // Note that this is also the maximal offset that the
-  // cartesian_compliance_controller can use to build up a restoring stiffness
-  // wrench.
+
   const double max_angle = 1.0;
   const double max_distance = 1.0;
   angle = std::clamp(angle, -max_angle, max_angle);
@@ -242,11 +217,9 @@ ctrl::Vector6D KukaCartesianImpedanceController::computeMotionError() {
   return error;
 }
 
-void KukaCartesianImpedanceController::computeTargetPos() {
+void KukaClikController::computeTargetConfiguration() {
   Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame);
   KDL::Frame simulated_frame = m_current_frame;
-  // ctrl::Matrix6D JJt =
-  //     ctrl::Matrix6D::Zero(Base::m_joint_number, Base::m_joint_number);
   KDL::Jacobian J(Base::m_joint_number);
 
   KDL::JntArray q_clik(Base::m_joint_number);
@@ -258,13 +231,8 @@ void KukaCartesianImpedanceController::computeTargetPos() {
   dq.data.setZero();
 
   // CLIK (closed loop inverse kinematics) algorithm
-
   ctrl::VectorND ns_task;
-  // CLIK parameters
-  const double eps = 2e-4;
-  const int IT_MAX = 50;
-  const double DT = 0.05;
-  const double eps_grad_ns = 1e-3;
+
   const double ns_gain = 0.05;
   typedef Eigen::Matrix<double, 6, 1> Vector6d;
   Vector6d err, dq_vec;
@@ -272,10 +240,9 @@ void KukaCartesianImpedanceController::computeTargetPos() {
   // Pre-allocate everything outside the loop
   ctrl::MatrixND J_pinv(Base::m_joint_number, 6);
   KDL::Twist delta_twist;
-  int i = 0, j = 0;
+  size_t i = 0, j = 0;
   ns_err.setZero();
   ns_err_old.setZero();
-  const double damp = 1e-6;
 
   do {
     // Compute forward kinematics
@@ -300,12 +267,11 @@ void KukaCartesianImpedanceController::computeTargetPos() {
       q_clik(j) += dq.data(j) * DT;
     }
     i++;
-  } while (i < IT_MAX && err.norm() > eps);
+  } while ((int)i < IT_MAX && err.norm() > EPS);
 
   const double alpha = 1.0;
   auto filtered_q = alpha * q_clik.data + (1 - alpha) * m_target_joint_position;
   m_target_joint_position = filtered_q;
-  // m_target_joint_position = m_q_starting_pose;
 
 #if LOGGING
   // if (m_received_target_frame) {
@@ -341,13 +307,12 @@ void KukaCartesianImpedanceController::computeTargetPos() {
     Eigen::VectorXd singular_values = svd.singularValues();
     return singular_values(0) / singular_values(singular_values.size() - 1);
   };
-  // m_logger->add("condition_number_jac", compute_condition_number(J.data));
-  // m_logger->flush_available_data();
-  // }
-#endif
+  m_logger->add("condition_number_jac", compute_condition_number(J.data));
+
+  #endif
 }
 
-void KukaCartesianImpedanceController::targetFrameCallback(
+void KukaClikController::targetFrameCallback(
     const geometry_msgs::msg::PoseStamped::SharedPtr target) {
   if (target->header.frame_id != Base::m_robot_base_link) {
     auto &clock = *get_node()->get_clock();
@@ -366,11 +331,10 @@ void KukaCartesianImpedanceController::targetFrameCallback(
                              target->pose.position.z));
   m_received_target_frame = true;
 }
-} // namespace kuka_cartesian_impedance_controller
+} // namespace kuka_clik_controller
 
 // Pluginlib
 #include <pluginlib/class_list_macros.hpp>
 
-PLUGINLIB_EXPORT_CLASS(
-    kuka_cartesian_impedance_controller::KukaCartesianImpedanceController,
-    controller_interface::ControllerInterface)
+PLUGINLIB_EXPORT_CLASS(kuka_clik_controller::KukaClikController,
+                       controller_interface::ControllerInterface)

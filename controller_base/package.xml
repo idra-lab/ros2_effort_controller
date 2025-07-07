@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>effort_controller_base</name>
+  <name>controller_base</name>
   <version>0.0.0</version>
-  <description>The effort_controller_base package</description>
+  <description>The controller_base package</description>
   <maintainer email="luca.beber@unitn.it">Luca Beber</maintainer>
   <license>BSD</license>
   <url type="repository">https://github.com/lucabeber/effort_controllers</url> 

@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>kuka_cartesian_impedance_controller</name>
+  <name>kuka_clik_controller</name>
   <version>0.0.0</version>
-  <description>Cartesian impedance controller achieved by using the proprietary KUKA's impedance
-    control (sending just the target joint position)</description>
+  <description>Closed loop inverse kinematics control for FRI used for both position and impedance
+    control.</description>
   <maintainer email="davide.nardi-1@unitn.it">Davide Nardi</maintainer>
   <license>BSD</license>
   <url type="repository">https://github.com/lucabeber/effort_controllers</url>
@@ -13,12 +13,12 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
-  <depend>effort_controller_base</depend>
+  <depend>controller_base</depend>
   <depend>controller_interface</depend>
   <depend>debug_msg</depend>
 
   <export>
     <build_type>ament_cmake</build_type>
-    <controller_interface plugin="${prefix}/kuka_cartesian_impedance_controller_plugin.xml" />
+    <controller_interface plugin="${prefix}/kuka_clik_controller_plugin.xml" />
   </export>
 </package>

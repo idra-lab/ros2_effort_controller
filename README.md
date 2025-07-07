@@ -1,4 +1,4 @@
-# Kuka Cartesian Impedance Controller
+# KUKA CLIK Controller
 ![build badge](https://github.com/lucabeber/effort_controller/actions/workflows/humble.yml/badge.svg)
 ![build badge](https://github.com/lucabeber/effort_controller/actions/workflows/jazzy.yml/badge.svg)
 ![build badge](https://github.com/lucabeber/effort_controller/actions/workflows/rolling.yml/badge.svg)
@@ -22,7 +22,7 @@ control_mode_ = new PositionControlMode();
 |Kinematics control          |`POSITION`          | `PositionControlMode`          |
 
 Check out how to use this controller in our KUKA LBR example [here](https://github.com/idra-lab/kuka_impedance)!  
-The structure of the code and some libraries have been taken from the repo [Cartesian Controllers](https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers).
+The code structure and some libraries have been taken from the repo [Cartesian Controllers](https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers).
 
 
 #### Parameters:
@@ -33,13 +33,13 @@ controller_manager:
   ros__parameters:
     update_rate: 500  # Hz
 
-    kuka_cartesian_impedance_controller:
-      type: kuka_cartesian_impedance_controller/KukaCartesianImpedanceController
+    kuka_clik_controller:
+      type: kuka_clik_controller/KukaClikController
 
     # More controller instances here
     # ...
 
-/**/kuka_cartesian_impedance_controller:
+/**/kuka_clik_controller:
   ros__parameters:
     max_linear_velocity: 0.3
     max_angular_velocity: 0.3
@@ -59,17 +59,14 @@ controller_manager:
       - lbr_A5
       - lbr_A6
       - lbr_A7
+    nullspace_desired_configuration:
+      - 0.0
+      - 0.70
+      - 0.0
+      - -1.25
+      - 0.0
+      - 1.40
+      - 0.0
     
     # More controllers here
-```
-#### Nullspace target configuration
-The target nullspace configuration can be set in `kuka_cartesian_impedance_controller.cpp` by modifying the `m_q_ns` array. The values are in radians and correspond to the desired joint angles for the nullspace configuration.:
-```
-  m_q_ns(0) = deg2rad(0.0);
-  m_q_ns(1) = deg2rad(40.0);
-  m_q_ns(2) = deg2rad(0.0);
-  m_q_ns(3) = deg2rad(-72.6);
-  m_q_ns(4) = deg2rad(0.0);
-  m_q_ns(5) = deg2rad(80.05);
-  m_q_ns(6) = deg2rad(0.0);
 ```

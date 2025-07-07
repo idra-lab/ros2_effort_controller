@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(effort_controller_base)
+project(controller_base)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -43,7 +43,7 @@ ament_export_dependencies(
 # Libraries
 #--------------------------------------------------------------------------------
 add_library(${PROJECT_NAME} SHARED
-  src/effort_controller_base.cpp
+  src/controller_base.cpp
 )
 
 # Manual includes for local directories and non-ament packages
@@ -71,7 +71,7 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC "PLUGINLIB__DISABLE_BOOST_FUNC
 # Install and export
 #--------------------------------------------------------------------------------
 
-# pluginlib_export_plugin_description_file(effort_controller_base ik_solver_plugin.xml)
+# pluginlib_export_plugin_description_file(controller_base ik_solver_plugin.xml)
 
 # Note: The workflow as described here
 # https://docs.ros.org/en/foxy/How-To-Guides/Ament-CMake-Documentation.html#building-a-library

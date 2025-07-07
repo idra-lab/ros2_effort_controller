@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(kuka_cartesian_impedance_controller)
+project(kuka_clik_controller)
 
 set(CMAKE_CXX_STANDARD 17)
 set(ADDITIONAL_COMPILE_OPTIONS -Wall -Wextra -Wpedantic -Wno-unused-parameter)
@@ -18,7 +18,7 @@ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 add_definitions(-DEIGEN_MPL2_ONLY)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(effort_controller_base REQUIRED)
+find_package(controller_base REQUIRED)
 find_package(debug_msg REQUIRED)
 
 # Try to find MatLogger2 if logging is enabled
@@ -39,7 +39,7 @@ endif()
 # Convenience variable for dependencies
 set(THIS_PACKAGE_INCLUDE_DEPENDS
         rclcpp
-        effort_controller_base
+        controller_base
         Eigen3
         debug_msg
 )
@@ -58,7 +58,7 @@ ament_export_dependencies(
 # Libraries
 #--------------------------------------------------------------------------------
 add_library(${PROJECT_NAME} SHARED
-  src/kuka_cartesian_impedance_controller.cpp
+  src/kuka_clik_controller.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -85,7 +85,7 @@ endif()
 # Install and export
 #--------------------------------------------------------------------------------
 
-pluginlib_export_plugin_description_file(controller_interface kuka_cartesian_impedance_controller_plugin.xml)
+pluginlib_export_plugin_description_file(controller_interface kuka_clik_controller_plugin.xml)
 
 install(
   DIRECTORY include/

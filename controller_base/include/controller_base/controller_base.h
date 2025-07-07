@@ -1,14 +1,13 @@
-#ifndef EFFORT_CONTROLLER_BASE_H_INCLUDED
-#define EFFORT_CONTROLLER_BASE_H_INCLUDED
+#ifndef CONTROLLER_BASE_H_INCLUDED
+#define CONTROLLER_BASE_H_INCLUDED
 
-#include <effort_controller_base/Utility.h>
+#include <controller_base/Utility.h>
 #include <urdf/model.h>
 #include <urdf_model/joint.h>
 
 #include <cmath>
 #include <controller_interface/controller_interface.hpp>
 #include <functional>
-#include <geometry_msgs/msg/wrench_stamped.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 #include <kdl/chain.hpp>
@@ -37,7 +36,7 @@
 #include "std_msgs/msg/float64_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
 
-namespace effort_controller_base {
+namespace controller_base {
 
 class RobotDescriptionListener : public rclcpp::Node {
 public:
@@ -50,20 +49,10 @@ private:
   std::shared_ptr<std::string> m_robot_description_ptr_;
 };
 
-/**
- * @brief Base class for each effort controller
- *
- * This class implements a common forward dynamics based solver for Effort
- * end effector error correction. Different child class controllers will define
- * what this error represents and should call \ref computeJointControlCmds with
- * that error.  The control commands are sent to the hardware with \ref
- * writeJointControlCmds.
- *
- */
-class EffortControllerBase : public controller_interface::ControllerInterface {
+class ControllerBase : public controller_interface::ControllerInterface {
 public:
-  EffortControllerBase();
-  virtual ~EffortControllerBase(){};
+  ControllerBase();
+  virtual ~ControllerBase(){};
 
   virtual controller_interface::InterfaceConfiguration
   command_interface_configuration() const override;
@@ -89,7 +78,7 @@ protected:
    * Depending on the hardware interface used, this is either joint positions
    * or velocities.
    */
-  void writeJointEffortCmds(ctrl::VectorND &target_joint_positions);
+  void writeJointCmds(ctrl::VectorND &target_joint_positions);
 
   /**
    * @brief Compute one control step using forward dynamics simulation
@@ -154,20 +143,6 @@ protected:
     return false;
   }
 
-  /**
-   * @brief Computes the Inverse Kinematics (IK) solution for the given desired
-   * pose.
-   *
-   * This function calculates the joint positions required to achieve the
-   * specified end-effector pose using the Kinematics and Dynamics Library
-   * (KDL).
-   *
-   * @param desired_pose The desired end-effector pose represented as a
-   * KDL::Frame.
-   */
-  void computeIKSolution(const KDL::Frame &desired_pose,
-                         ctrl::VectorND &simulated_joint_positions);
-
   KDL::Chain m_robot_chain;
   KDL::Jacobian m_jacobian; // Jacobian
 
@@ -175,11 +150,6 @@ protected:
   std::shared_ptr<KDL::TreeFkSolverPos_recursive> m_forward_kinematics_solver;
   std::shared_ptr<KDL::ChainFkSolverPos_recursive> m_fk_solver;
   KDL::JntArray m_q_ns; 
-  KDL::JntArray m_weights;
-
-  /**
-   * @brief Allow users to choose the IK solver type on startup
-   */
 
   // Dynamic parameters
   std::string m_end_effector_link;
@@ -228,6 +198,6 @@ private:
 
 };
 
-} // namespace effort_controller_base
+} // namespace controller_base
 
 #endif

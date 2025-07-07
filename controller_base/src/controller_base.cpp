@@ -1,8 +1,8 @@
-#include <effort_controller_base/effort_controller_base.h>
+#include <controller_base/controller_base.h>
 
-namespace effort_controller_base {
+namespace controller_base {
 
-EffortControllerBase::EffortControllerBase() {}
+ControllerBase::ControllerBase() {}
 
 RobotDescriptionListener::RobotDescriptionListener(
     std::shared_ptr<std::string> robot_description_ptr,
@@ -27,7 +27,7 @@ RobotDescriptionListener::RobotDescriptionListener(
 }
 
 controller_interface::InterfaceConfiguration
-EffortControllerBase::command_interface_configuration() const {
+ControllerBase::command_interface_configuration() const {
   controller_interface::InterfaceConfiguration conf;
   conf.type = controller_interface::interface_configuration_type::INDIVIDUAL;
   conf.names.reserve(m_joint_names.size() * m_cmd_interface_types.size());
@@ -42,7 +42,7 @@ EffortControllerBase::command_interface_configuration() const {
 }
 
 controller_interface::InterfaceConfiguration
-EffortControllerBase::state_interface_configuration() const {
+ControllerBase::state_interface_configuration() const {
   controller_interface::InterfaceConfiguration conf;
   conf.type = controller_interface::interface_configuration_type::INDIVIDUAL;
   conf.names.reserve(m_joint_names.size() * m_state_interface_types.size());
@@ -55,7 +55,7 @@ EffortControllerBase::state_interface_configuration() const {
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-EffortControllerBase::on_init() {
+ControllerBase::on_init() {
   if (!m_initialized) {
     auto_declare<std::string>("ik_solver", "forward_dynamics");
     auto_declare<std::string>("robot_description", "");
@@ -108,8 +108,7 @@ EffortControllerBase::on_init() {
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-EffortControllerBase::on_configure(
-    const rclcpp_lifecycle::State &previous_state) {
+ControllerBase::on_configure(const rclcpp_lifecycle::State &previous_state) {
   if (m_configured) {
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
         CallbackReturn::SUCCESS;
@@ -190,11 +189,22 @@ EffortControllerBase::on_configure(
 
   // initialize postural task
   m_q_ns.resize(m_joint_number);
-  m_weights.resize(m_joint_number);
 
   // Parse joint limits
   m_upper_pos_limits.resize(m_joint_number);
   m_lower_pos_limits.resize(m_joint_number);
+  std::vector<double> q_ns =
+      get_node()
+          ->get_parameter("nullspace_desired_configuration")
+          .as_double_array();
+  if (q_ns.size() != m_joint_number) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+                 "Nullspace desired configuration size does not match "
+                 "number of joints (%zu != %zu)",
+                 q_ns.size(), m_joint_number);
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
+        CallbackReturn::ERROR;
+  }
 
   for (size_t i = 0; i < m_joint_number; ++i) {
     if (!robot_model.getJoint(m_joint_names[i])) {
@@ -218,40 +228,23 @@ EffortControllerBase::on_configure(
       m_joint_effort_limits(i) =
           robot_model.getJoint(m_joint_names[i])->limits->effort;
     }
-
+    m_q_ns(i) = q_ns[i];
     // print limits
     RCLCPP_INFO_STREAM(get_node()->get_logger(),
                        "Joint " << m_joint_names[i] << ": "
                                 << "lower: " << m_lower_pos_limits(i)
                                 << ", upper: " << m_upper_pos_limits(i)
-                                << ", effort: " << m_joint_effort_limits(i));
+                                << ", effort: " << m_joint_effort_limits(i)
+                                << ", nullspace des: " << m_q_ns(i));
   }
 
   // Initialize solvers
   // m_ik_solver->init(get_node(),m_robot_chain,upper_pos_limits,lower_pos_limits);
-  KDL::Vector grav(0.0, 0.0, -9.81);
   KDL::Tree tmp("not_relevant");
   tmp.addChain(m_robot_chain, "not_relevant");
   m_forward_kinematics_solver.reset(new KDL::TreeFkSolverPos_recursive(tmp));
   m_fk_solver.reset(new KDL::ChainFkSolverPos_recursive(m_robot_chain));
-
-  auto deg2rad = [](double deg) { return deg * M_PI / 180.0; };
-
-  m_q_ns(0) = deg2rad(0.0);
-  m_q_ns(1) = deg2rad(40.0);
-  m_q_ns(2) = deg2rad(0.0);
-  m_q_ns(3) = deg2rad(-72.6);
-  m_q_ns(4) = deg2rad(0.0);
-  m_q_ns(5) = deg2rad(80.05);
-  m_q_ns(6) = deg2rad(0.0);
-  
-  m_weights(0) = 1.0;
-  m_weights(1) = 1.0;
-  m_weights(2) = 1.0;
-  m_weights(3) = 1.0; 
-  m_weights(4) = 1.0;
-  m_weights(5) = 1.0;
-  m_weights(6) = 1.0;
+  m_jnt_to_jac_solver.reset(new KDL::ChainJntToJacSolver(m_robot_chain));
 
   RCLCPP_INFO_STREAM(get_node()->get_logger(), "Robot Chain: ");
   for (unsigned int i = 0; i < m_robot_chain.getNrOfSegments(); ++i) {
@@ -292,15 +285,13 @@ EffortControllerBase::on_configure(
   m_old_joint_velocities.data.setZero();
   m_simulated_joint_motion.resize(m_joint_number);
 
-
   RCLCPP_INFO(get_node()->get_logger(), "Finished Base on_configure");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
       CallbackReturn::SUCCESS;
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-EffortControllerBase::on_deactivate(
-    const rclcpp_lifecycle::State &previous_state) {
+ControllerBase::on_deactivate(const rclcpp_lifecycle::State &previous_state) {
   if (m_active) {
     m_joint_cmd_eff_handles.clear();
     m_joint_cmd_pos_handles.clear();
@@ -315,8 +306,7 @@ EffortControllerBase::on_deactivate(
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-EffortControllerBase::on_activate(
-    const rclcpp_lifecycle::State &previous_state) {
+ControllerBase::on_activate(const rclcpp_lifecycle::State &previous_state) {
   if (m_active) {
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
         CallbackReturn::SUCCESS;
@@ -368,28 +358,28 @@ EffortControllerBase::on_activate(
       CallbackReturn::SUCCESS;
 }
 
-void EffortControllerBase::writeJointEffortCmds(
-    ctrl::VectorND &target_joint_positions) {
+void ControllerBase::writeJointCmds(ctrl::VectorND &target_joint_positions) {
   const double max_velocity = 2 * 0.001309; // rad/s
   const double eps = 1e-4;
   for (size_t i = 0; i < m_joint_number; ++i) {
     // enforce joint limits
     if (target_joint_positions(i) + 2 * max_velocity > m_upper_pos_limits(i)) {
       // set equal to current
-      target_joint_positions(i) = m_upper_pos_limits(i) - 2 * max_velocity - eps;
+      target_joint_positions(i) =
+          m_upper_pos_limits(i) - 2 * max_velocity - eps;
     } else if (target_joint_positions(i) - 2 * max_velocity <
                m_lower_pos_limits(i)) {
       // set equal to current
-      target_joint_positions(i) = m_lower_pos_limits(i) + 2 * max_velocity + eps;
+      target_joint_positions(i) =
+          m_lower_pos_limits(i) + 2 * max_velocity + eps;
     }
 
     m_joint_cmd_pos_handles[i].get().set_value(target_joint_positions(i));
   }
 }
 
-ctrl::Vector6D
-EffortControllerBase::displayInBaseLink(const ctrl::Vector6D &vector,
-                                        const std::string &from) {
+ctrl::Vector6D ControllerBase::displayInBaseLink(const ctrl::Vector6D &vector,
+                                                 const std::string &from) {
   // Adjust format
   KDL::Wrench wrench_kdl;
   for (int i = 0; i < 6; ++i) {
@@ -412,9 +402,8 @@ EffortControllerBase::displayInBaseLink(const ctrl::Vector6D &vector,
   return out;
 }
 
-ctrl::Matrix6D
-EffortControllerBase::displayInBaseLink(const ctrl::Matrix6D &tensor,
-                                        const std::string &from) {
+ctrl::Matrix6D ControllerBase::displayInBaseLink(const ctrl::Matrix6D &tensor,
+                                                 const std::string &from) {
   // Get rotation to base
   KDL::Frame R_kdl;
   m_forward_kinematics_solver->JntToCart(m_joint_positions, R_kdl, from);
@@ -435,9 +424,8 @@ EffortControllerBase::displayInBaseLink(const ctrl::Matrix6D &tensor,
   return tmp;
 }
 
-ctrl::Vector6D
-EffortControllerBase::displayInTipLink(const ctrl::Vector6D &vector,
-                                       const std::string &to) {
+ctrl::Vector6D ControllerBase::displayInTipLink(const ctrl::Vector6D &vector,
+                                                const std::string &to) {
   // Adjust format
   KDL::Wrench wrench_kdl;
   for (int i = 0; i < 6; ++i) {
@@ -459,7 +447,7 @@ EffortControllerBase::displayInTipLink(const ctrl::Vector6D &vector,
   return out;
 }
 
-void EffortControllerBase::updateJointStates() {
+void ControllerBase::updateJointStates() {
   for (size_t i = 0; i < m_joint_number; ++i) {
     const auto &position_interface = m_joint_state_pos_handles[i].get();
     const auto &velocity_interface = m_joint_state_vel_handles[i].get();
@@ -474,4 +462,4 @@ void EffortControllerBase::updateJointStates() {
   }
 }
 
-} // namespace effort_controller_base
+} // namespace controller_base
