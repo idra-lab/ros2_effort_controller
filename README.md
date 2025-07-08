@@ -4,7 +4,7 @@
 ![build badge](https://github.com/lucabeber/effort_controller/actions/workflows/rolling.yml/badge.svg)
 
 
-This branch implements command the joint configuration to the [lbr_stack](https://github.com/idra-lab/lbr_fri_ros2_stack) KUKA hardware interface so it allows `Cartesian Impedance Control` as well as `Joint Position Control` depending on the command input chosen as `client_command_mode` in the hardware interface.
+This branch implements command the joint configuration to the [lbr_stack](https://github.com/idra-lab/lbr_fri_ros2_stack) KUKA hardware interface so it allows Cartesian and Joint Impedance Control as well as Joint Position Control depending on the command input chosen as `client_command_mode` in the hardware interface.
 
 This controller is designed to be used with the KUKA FRI in `POSITION` command mode. To switch FRI Command Mode you need to update the following line in the `LBRServer.java` application, chosing between the two controller.
 ```
@@ -18,8 +18,9 @@ control_mode_ = new PositionControlMode();
 
 |Supported Controller Options| FRI Command Mode   | FRI Controller Mode            |
 |----------------------------|--------------------|--------------------------------|
+|Kinematics Control          |`POSITION`          | `PositionControlMode`          |
+|Joint Impedance Control     |`POSITION`          | `JointImpedanceControlMode`    |
 |Cartesian Impedance Control |`POSITION`          | `CartesianImpedanceControlMode`|
-|Kinematics control          |`POSITION`          | `PositionControlMode`          |
 
 Check out how to use this controller in our KUKA LBR example [here](https://github.com/idra-lab/kuka_impedance)!  
 The code structure and some libraries have been taken from the repo [Cartesian Controllers](https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers).
