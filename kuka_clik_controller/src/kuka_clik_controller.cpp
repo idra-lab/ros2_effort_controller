@@ -2,8 +2,7 @@
 #include <kuka_clik_controller/kuka_clik_controller.h>
 namespace kuka_clik_controller {
 
-KukaClikController::KukaClikController()
-    : Base::ControllerBase(), m_hand_frame_control(true) {}
+KukaClikController::KukaClikController() : Base::ControllerBase() {}
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 KukaClikController::on_init() {
@@ -16,11 +15,25 @@ KukaClikController::on_init() {
       get_node()->get_parameter("max_linear_velocity").as_double();
   m_max_angular_velocity =
       get_node()->get_parameter("max_angular_velocity").as_double();
+  m_click_dt = get_node()->get_parameter("clik_dt").as_double();
+  m_click_it_max_ = get_node()->get_parameter("clik_it_max").as_int();
+  m_click_eps_ = get_node()->get_parameter("clik_eps").as_double();
+  m_clik_filter_alpha_ =
+      get_node()->get_parameter("clik_filter_alpha").as_double();
+
+  // Clamp the parameters to reasonable values
   m_max_linear_velocity = std::max(0.0, m_max_linear_velocity);
   m_max_angular_velocity = std::max(0.0, m_max_angular_velocity);
+  m_clik_filter_alpha_ = std::clamp(m_clik_filter_alpha_, 0.0, 1.0);
+  m_click_dt = std::max(0.0, m_click_dt);
+  m_click_eps_ = std::max(0.0, m_click_eps_);
+  m_click_it_max_ = std::max(1, m_click_it_max_);
+
   RCLCPP_WARN(get_node()->get_logger(), "Max linear velocity: %f",
               m_max_linear_velocity);
   RCLCPP_WARN(get_node()->get_logger(), "Max angular velocity: %f",
+              m_max_angular_velocity);
+  RCLCPP_WARN(get_node()->get_logger(), "CLIK alpha filter: %f",
               m_max_angular_velocity);
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
@@ -264,13 +277,13 @@ void KukaClikController::computeTargetConfiguration() {
 
     // Integrate joint velocities (Euler integration)
     for (j = 0; j < Base::m_joint_number; j++) {
-      q_clik(j) += dq.data(j) * DT;
+      q_clik(j) += dq.data(j) * m_click_dt;
     }
     i++;
-  } while ((int)i < IT_MAX && err.norm() > EPS);
+  } while ((int)i < m_click_it_max_ && err.norm() > m_click_eps_);
 
-  const double alpha = 1.0;
-  auto filtered_q = alpha * q_clik.data + (1 - alpha) * m_target_joint_position;
+  auto filtered_q = m_clik_filter_alpha_ * q_clik.data +
+                    (1 - m_clik_filter_alpha_) * m_target_joint_position;
   m_target_joint_position = filtered_q;
 
 #if LOGGING
@@ -309,7 +322,7 @@ void KukaClikController::computeTargetConfiguration() {
   };
   m_logger->add("condition_number_jac", compute_condition_number(J.data));
 
-  #endif
+#endif
 }
 
 void KukaClikController::targetFrameCallback(

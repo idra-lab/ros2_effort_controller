@@ -43,6 +43,12 @@ controller_manager:
   ros__parameters:
     max_linear_velocity: 0.3
     max_angular_velocity: 0.3
+    # CLIK parameters
+    click_dt: 0.1 # integration time step
+    click_it_max: 50 # maximum number of iterations for each control step
+    click_eps: 2e-4 # convergence threshold
+    clik_filter_alpha: 0.5 # low-pass filter alpha for the output (lower it to avoid motor noise) 
+
     end_effector_link: "lbr_link_ee"
     robot_base_link: "lbr_link_0"
     compliance_ref_link: "lbr_link_ee"

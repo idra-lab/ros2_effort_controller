@@ -76,11 +76,10 @@ private:
 
   double m_last_time;
   // CLIK parameters
-  const double EPS = 2e-4;
-  const int IT_MAX = 50;
-  const double DT = 0.05;
-
-  bool m_hand_frame_control;
+  double m_click_dt = 0.05;
+  int m_click_it_max_ = 50;
+  double m_click_eps_ = 2e-4;
+  double m_clik_filter_alpha_ = 0.1;
 
 };
 
