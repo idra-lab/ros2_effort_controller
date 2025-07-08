@@ -33,8 +33,8 @@ KukaClikController::on_init() {
               m_max_linear_velocity);
   RCLCPP_WARN(get_node()->get_logger(), "Max angular velocity: %f",
               m_max_angular_velocity);
-  RCLCPP_WARN(get_node()->get_logger(), "CLIK alpha filter: %f",
-              m_max_angular_velocity);
+  RCLCPP_WARN(get_node()->get_logger(), "CLIK parameters: dt: %f, it_max: %d, eps: %f, filter_alpha: %f",
+              m_click_dt, m_click_it_max_, m_click_eps_, m_clik_filter_alpha_);
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
       CallbackReturn::SUCCESS;
