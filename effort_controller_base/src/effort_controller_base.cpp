@@ -60,7 +60,7 @@ EffortControllerBase::on_init() {
     auto_declare<std::string>("robot_base_link", "");
     auto_declare<std::string>("compliance_ref_link", "");
     auto_declare<std::string>("end_effector_link", "");
-    auto_declare<bool>("kuka_hw", false);
+    auto_declare<bool>("command_current_configuration", false);
     auto_declare<bool>("compensate_gravity", false);
     auto_declare<bool>("compensate_coriolis", false);
     auto_declare<double>("delta_tau_max", 1.0);
@@ -153,13 +153,13 @@ EffortControllerBase::on_configure(
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
         CallbackReturn::ERROR;
   }
-  m_compliance_ref_link =
-      get_node()->get_parameter("compliance_ref_link").as_string();
-  if (m_compliance_ref_link.empty()) {
-    RCLCPP_ERROR(get_node()->get_logger(), "compliance_ref_link is empty");
-    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
-        CallbackReturn::ERROR;
-  }
+  // m_compliance_ref_link =
+  //     get_node()->get_parameter("compliance_ref_link").as_string();
+  // if (m_compliance_ref_link.empty()) {
+  //   RCLCPP_ERROR(get_node()->get_logger(), "compliance_ref_link is empty");
+  //   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
+  //       CallbackReturn::ERROR;
+  // }
 
   // Build a kinematic chain of the robot
   if (!robot_model.initString(m_robot_description)) {
@@ -183,14 +183,14 @@ EffortControllerBase::on_configure(
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
         CallbackReturn::ERROR;
   }
-  if (!robotChainContains(m_compliance_ref_link)) {
-    RCLCPP_ERROR_STREAM(get_node()->get_logger(),
-                        m_compliance_ref_link
-                            << " is not part of the kinematic chain from "
-                            << m_robot_base_link << " to "
-                            << m_end_effector_link);
-    return CallbackReturn::ERROR;
-  }
+  // if (!robotChainContains(m_compliance_ref_link)) {
+  //   RCLCPP_ERROR_STREAM(get_node()->get_logger(),
+  //                       m_compliance_ref_link
+  //                           << " is not part of the kinematic chain from "
+  //                           << m_robot_base_link << " to "
+  //                           << m_end_effector_link);
+  //   return CallbackReturn::ERROR;
+  // }
 
   // Get names of actuated joints
   m_joint_names = get_node()->get_parameter("joints").as_string_array();
@@ -287,8 +287,8 @@ EffortControllerBase::on_configure(
         CallbackReturn::ERROR;
   }
   // Check if kuka is been used
-  m_kuka_hw = get_node()->get_parameter("kuka_hw").as_bool();
-  if (m_kuka_hw == true) {
+  m_command_current_configuration_ = get_node()->get_parameter("command_current_configuration").as_bool();
+  if (m_command_current_configuration_ == true) {
     RCLCPP_WARN(
         get_node()->get_logger(),
         "Using Kuka, the position will be overwritten at each control cycle to "
@@ -340,7 +340,7 @@ EffortControllerBase::on_activate(
 
   // Get command handles.
   // Position
-  if (m_kuka_hw == true) {
+  if (m_command_current_configuration_ == true) {
     if (!controller_interface::get_ordered_interfaces(
             command_interfaces_, m_joint_names,
             hardware_interface::HW_IF_POSITION, m_joint_cmd_pos_handles)) {
@@ -420,7 +420,7 @@ void EffortControllerBase::writeJointEffortCmds() {
       }
     }
   }
-  if (m_kuka_hw == true) {
+  if (m_command_current_configuration_ == true) {
     for (size_t i = 0; i < m_joint_number; ++i) {
       m_joint_cmd_pos_handles[i].get().set_value(m_joint_positions(i));
     }

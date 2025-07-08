@@ -20,7 +20,7 @@ joint_impedance_controller:
     end_effector_link: "tool0"
     robot_base_link: "base_link"
     ft_sensor_ref_link: "sensor_link"
-    compliance_ref_link: "compliance_link"
+    command_current_configuration: false
     joints:
       - joint_01
       - joint_02

@@ -1,0 +1,10 @@
+<library path="gravity_compensation">
+  <class name="gravity_compensation/GravityCompensation"
+    type="gravity_compensation::GravityCompensation"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>
+      The GravityCompensation which computes the torque commands for a robot joint based on the
+      impedance control law.
+    </description>
+  </class>
+</library>

@@ -192,10 +192,11 @@ protected:
 
   // Dynamic parameters
   std::string m_end_effector_link;
-  std::string m_compliance_ref_link;
+  // std::string m_compliance_ref_link;
   std::string m_robot_base_link;
   bool m_compensate_gravity;
   bool m_compensate_coriolis;
+  bool m_command_current_configuration_; // KUKA specific, for KUKA set this to true
   std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>
       m_joint_state_pos_handles;
   std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>
@@ -235,7 +236,6 @@ private:
   KDL::JntArray m_joint_effort_limits;
   double m_delta_tau_max;
 
-  bool m_kuka_hw;
 };
 
 } // namespace effort_controller_base

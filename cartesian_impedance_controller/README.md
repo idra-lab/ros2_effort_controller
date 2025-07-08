@@ -20,7 +20,7 @@ cartesian_impedance_controller:
     end_effector_link: "tool0"
     robot_base_link: "base_link"
     ft_sensor_ref_link: "sensor_link"
-    compliance_ref_link: "compliance_link"
+    command_current_configuration: false # for KUKA set this to true, for other robots set to false
     max_impedance_force: 10.0 # (N) maximum task force
     delta_tau_max: 1.0 # (Nm) maximum torque increment in one control cycle
     joints:
