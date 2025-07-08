@@ -98,7 +98,7 @@ class CartesianImpedanceController
   KDL::Frame m_current_frame;
 
   ctrl::MatrixND m_identity;
-  ctrl::VectorND m_q_starting_pose;
+  ctrl::VectorND m_q_ns; // Null space configuration
 
   double m_vel_old = 0.0;
   double current_acc_j0 = 0.0;

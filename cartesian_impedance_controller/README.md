@@ -47,7 +47,15 @@ cartesian_impedance_controller:
         rot_y: 50
         rot_z: 50
 
-    nullspace_stiffness: 0.0
+    nullspace_stiffness: 1.0
+    nullspace_configuration:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 1.57
+      - 0.0
+      - 0.0
+      - 0.0
     compensate_gravity: false
     compensate_coriolis: false
     compensate_dJdq: false

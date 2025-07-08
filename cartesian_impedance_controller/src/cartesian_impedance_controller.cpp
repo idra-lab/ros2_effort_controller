@@ -17,6 +17,8 @@ CartesianImpedanceController::on_init() {
   auto_declare<bool>("hand_frame_control", true);
   auto_declare<double>("nullspace_stiffness", 0.0);
   auto_declare<bool>("compensate_dJdq", false);
+  auto_declare<std::vector<double>>("nullspace_desired_configuration",
+                                    std::vector<double>());
 
   constexpr double default_lin_stiff = 500.0;
   constexpr double default_rot_stiff = 50.0;
@@ -26,7 +28,7 @@ CartesianImpedanceController::on_init() {
   auto_declare<double>("stiffness.rot_x", default_rot_stiff);
   auto_declare<double>("stiffness.rot_y", default_rot_stiff);
   auto_declare<double>("stiffness.rot_z", default_rot_stiff);
-  auto_declare<double>("max_impedance_force", 70.0); //TODO
+  auto_declare<double>("max_impedance_force", 70.0); // TODO
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
       CallbackReturn::SUCCESS;
@@ -53,7 +55,6 @@ CartesianImpedanceController::on_configure(
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
         CallbackReturn::ERROR;
   }
-
   // Set stiffness
   ctrl::Vector6D tmp;
   tmp[0] = get_node()->get_parameter("stiffness.trans_x").as_double();
@@ -74,13 +75,38 @@ CartesianImpedanceController::on_configure(
   tmp[5] = 2 * sqrt(tmp[5]);
 
   m_max_impendance_force =
-      get_node()->get_parameter("max_impedance_force").as_double(); //TODO
+      get_node()->get_parameter("max_impedance_force").as_double(); // TODO
   // Set nullspace stiffness
   m_null_space_stiffness =
       get_node()->get_parameter("nullspace_stiffness").as_double();
-  RCLCPP_INFO(get_node()->get_logger(), "Postural task stiffness: %f",
-              m_null_space_stiffness);
-
+  if (m_null_space_stiffness > 0.0) {
+    // Set nullspace configuration
+    std::vector<double> nullspace_config =
+        get_node()
+            ->get_parameter("nullspace_desired_configuration")
+            .as_double_array();
+    if (nullspace_config.empty()) {
+      RCLCPP_WARN(
+          get_node()->get_logger(),
+          "Null space configuration is empty, zeroing null space stiffness");
+      m_null_space_stiffness = 0.0;
+    } else if (nullspace_config.size() != Base::m_joint_number) {
+      RCLCPP_ERROR(get_node()->get_logger(),
+                   "Null space configuration size does not match joint number: "
+                   "%zu != %zu",
+                   nullspace_config.size(), Base::m_joint_number);
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
+          CallbackReturn::ERROR;
+    }
+    m_q_ns = ctrl::VectorND::Zero(Base::m_joint_number);
+    for (size_t i = 0; i < Base::m_joint_number; ++i) {
+      m_q_ns(i) = nullspace_config[i];
+    }
+    RCLCPP_INFO_STREAM(get_node()->get_logger(),
+    "Postural task stiffness: " << m_null_space_stiffness
+    << " for configuration: "
+    << m_q_ns.transpose());
+  }
   m_compensate_dJdq = get_node()->get_parameter("compensate_dJdq").as_bool();
   RCLCPP_INFO(get_node()->get_logger(), "Compensate dJdq: %d",
               m_compensate_dJdq);
@@ -133,8 +159,6 @@ CartesianImpedanceController::on_activate(
   m_target_frame = m_current_frame;
 
   RCLCPP_INFO(get_node()->get_logger(), "Finished Impedance on_activate");
-
-  m_q_starting_pose = Base::m_joint_positions.data;
 
   m_target_wrench = ctrl::Vector6D::Zero();
 #if LOGGING
@@ -301,13 +325,11 @@ ctrl::VectorND CartesianImpedanceController::computeTorque() {
   }
 
   // Compute the null space torque
-  q_null_space = m_q_starting_pose;
   if (m_null_space_stiffness > 1e-6) {
     // Compute dynamically consistent null space projector
     tau_null =
         (m_identity - jac.transpose() * Lambda * jac * M.data.inverse()) *
-        (m_null_space_stiffness * (-q + q_null_space) -
-         m_null_space_damping * q_dot);
+        (m_null_space_stiffness * (-q + m_q_ns) - m_null_space_damping * q_dot);
   } else {
     tau_null = ctrl::VectorND::Zero(Base::m_joint_number);
   }
