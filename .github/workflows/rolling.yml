@@ -2,7 +2,11 @@ name: Rolling CI
 
 on:
   push:
+    branches:
+      - "main"
   pull_request:
+      branches:
+      - "main"
 
 jobs:
   industrial_ci:
@@ -10,7 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         env:
-          - {ROS_DISTRO: rolling, ROS_REPO: testing}
           - {ROS_DISTRO: rolling, ROS_REPO: main}
     runs-on: ubuntu-latest
     steps:
