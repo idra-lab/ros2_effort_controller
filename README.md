@@ -1,9 +1,48 @@
-# KUKA CLIK Controller
-![build badge](https://github.com/lucabeber/effort_controller/actions/workflows/humble.yml/badge.svg)
-![build badge](https://github.com/lucabeber/effort_controller/actions/workflows/jazzy.yml/badge.svg)
-![build badge](https://github.com/lucabeber/effort_controller/actions/workflows/rolling.yml/badge.svg)
+# ROS2 Effort Controller
+<table>
+    <tr>
+        <td>
+        </td>
+        <td>
+            Humble
+        </td>
+        <td>
+            Jazzy
+        </td>
+        <td>
+            Rolling
+        </td>
+    </tr>
+        <td>
+            Branch main
+        </td>
+        <td>
+            <a href='humble main'><img src='https://github.com/idra-lab/ros2_effort_controller/actions/workflows/humble.yml/badge.svg'></a><br/>
+        </td>
+        <td>
+            <a href='jazzy main'><img src='https://github.com/idra-lab/ros2_effort_controller/actions/workflows/jazzy.yml/badge.svg'></a><br/>
+        </td>
+        <td>
+            <a href='rolling main'><img src='https://github.com/idra-lab/ros2_effort_controller/actions/workflows/rolling.yml/badge.svg'></a><br/>
+        </td>
+    </tr>
+    <tr>
+        <td>
+            Branch kuka-prop-ctrl
+        </td>
+        <td>
+            <a href='humble kuka-prop-ctrl'><img src='https://github.com/idra-lab/ros2_effort_controller/actions/workflows/humble-prop-ctrl.yml/badge.svg'></a><br/>
+        </td>
+        <td>
+            <a href='jazzy kuka-prop-ctrl'><img src='https://github.com/idra-lab/ros2_effort_controller/actions/workflows/jazzy-prop-ctrl.yml/badge.svg'></a><br/>
+        </td>
+       <td>
+            <a href='rolling kuka-prop-ctrl'><img src='https://github.com/idra-lab/ros2_effort_controller/actions/workflows/rolling-prop-ctrl.yml/badge.svg'></a><br/>
+        </td>
+    </tr>
+</table>
 
-
+## KUKA CLIK Controller
 This branch implements command the joint configuration to the [lbr_stack](https://github.com/idra-lab/lbr_fri_ros2_stack) KUKA hardware interface so it allows Cartesian and Joint Impedance Control as well as Joint Position Control depending on the command input chosen as `client_command_mode` in the hardware interface.
 
 This controller is designed to be used with the KUKA FRI in `POSITION` command mode. To switch FRI Command Mode you need to update the following line in the `LBRServer.java` application, chosing between the two controller.
