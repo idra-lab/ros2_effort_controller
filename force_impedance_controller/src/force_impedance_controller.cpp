@@ -40,7 +40,7 @@ ForceImpedanceController::on_init() {
   auto_declare<double>("command_timeout_s", 0.0); // zero retains the legacy pose-hold mode
   auto_declare<double>("sensor_timeout_s", 0.2);
   auto_declare<double>("max_contact_force", 4.0);
-  auto_declare<double>("force_feedback_gain", 1.0);
+  auto_declare<double>("force_feedback_gain", defaultForceFeedbackGain());
   auto_declare<double>("sensor_tool_mass", 0.0); // zero for precompensated input
   auto_declare<std::vector<double>>("sensor_tool_com", {0.0, 0.0, 0.0});
   auto_declare<std::vector<double>>("sensor_bias", {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
@@ -286,6 +286,7 @@ ForceImpedanceController::on_deactivate(
 controller_interface::return_type
 ForceImpedanceController::update(const rclcpp::Time &time,
                                      const rclcpp::Duration &period) {
+  m_control_period_s = period.seconds();
   // Update joint states
   Base::updateJointStates();
 
@@ -375,14 +376,6 @@ ctrl::VectorND ForceImpedanceController::computeTorque() {
   const ctrl::Vector6D motion_error = computeMotionError();
   ctrl::Matrix6D stiffness = Base::displayInBaseLink(m_cartesian_stiffness, Base::m_end_effector_link);
   ctrl::Matrix6D damping;
-  if (!math::modalDamping(lambda, stiffness, std::sqrt(0.5), damping)) return invalid();
-  if (m_hybrid_normal_force && m_target_wrench.head<3>().norm() > 1e-6) {
-    const Eigen::Vector3d normal = m_target_wrench.head<3>().normalized();
-    ctrl::Matrix6D tangent = ctrl::Matrix6D::Identity();
-    tangent.topLeftCorner<3, 3>() -= normal * normal.transpose();
-    // Damping remains positive on the force axis, while the normal spring is removed.
-    stiffness = tangent * stiffness * tangent;
-  }
 
   ctrl::VectorND tau = ctrl::VectorND::Zero(Base::m_joint_number);
   ctrl::VectorND null_torque = ctrl::VectorND::Zero(Base::m_joint_number);
@@ -398,9 +391,7 @@ ctrl::VectorND ForceImpedanceController::computeTorque() {
                                         Base::m_joint_velocities, coriolis) < 0) return invalid();
     tau += coriolis.data;
   }
-  ctrl::Vector6D task_wrench = stiffness * motion_error - damping * (jac * q_dot) +
-      math::forceFeedback(m_target_wrench, m_ft_sensor_wrench,
-                          m_force_feedback_gain, m_hybrid_normal_force);
+  ctrl::Vector6D task_wrench = taskWrench(motion_error, jac * q_dot, lambda, stiffness, damping);
   if (m_compensate_dJdq) {
     KDL::JntArrayVel q_in(Base::m_joint_positions, Base::m_joint_velocities);
     KDL::Twist derivative;
@@ -442,6 +433,23 @@ ctrl::VectorND ForceImpedanceController::computeTorque() {
   m_logger->add("joint_torque", tau);
 #endif
   return tau;
+}
+
+ctrl::Vector6D ForceImpedanceController::taskWrench(const ctrl::Vector6D &error,
+    const ctrl::Vector6D &velocity, const ctrl::Matrix6D &inertia,
+    ctrl::Matrix6D &stiffness, ctrl::Matrix6D &damping) {
+  namespace math = effort_controller_base::control_math;
+  if (!math::modalDamping(inertia, stiffness, std::sqrt(0.5), damping))
+    return ctrl::Vector6D::Constant(std::numeric_limits<double>::quiet_NaN());
+  if (m_hybrid_normal_force && m_target_wrench.head<3>().norm() > 1e-6) {
+    const Eigen::Vector3d normal = m_target_wrench.head<3>().normalized();
+    ctrl::Matrix6D tangent = ctrl::Matrix6D::Identity();
+    tangent.topLeftCorner<3, 3>() -= normal * normal.transpose();
+    stiffness = tangent * stiffness * tangent;
+  }
+  return stiffness * error - damping * velocity +
+      math::forceFeedback(m_target_wrench, m_ft_sensor_wrench,
+                          m_force_feedback_gain, m_hybrid_normal_force);
 }
 
 namespace {
@@ -565,6 +573,7 @@ void ForceImpedanceController::readInputs() {
   const bool sensor_ok = fresh(sensor, m_sensor_timeout_s) && stampedFresh(sensor, m_sensor_timeout_s);
   m_input_inhibited = effort_controller_base::control_math::inhibitInput(
       commands_ok, sensor_ok, m_target_wrench, m_ft_sensor_wrench, m_max_contact_force, m_contact_fault);
+  if (requireForceSensor() && !sensor_ok) m_input_inhibited = true;
   if (m_input_inhibited) {
     m_target_wrench.setZero();
     m_target_frame = m_current_frame; // zero spring error; retain damping and gravity

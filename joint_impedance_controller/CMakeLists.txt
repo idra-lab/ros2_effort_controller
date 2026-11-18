@@ -13,14 +13,18 @@ add_definitions(-DEIGEN_MPL2_ONLY)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(effort_controller_base REQUIRED)
-find_package(debug_msg REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(realtime_tools REQUIRED)
+find_package(pluginlib REQUIRED)
 
 # Convenience variable for dependencies
 set(THIS_PACKAGE_INCLUDE_DEPENDS
         rclcpp
         effort_controller_base
         Eigen3
-        debug_msg
+        geometry_msgs
+        realtime_tools
+        pluginlib
 )
 
 ament_export_dependencies(
@@ -87,5 +91,13 @@ ament_export_include_directories(
 ament_export_libraries(
   ${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(joint_controller_lifecycle_test test/joint_controller_lifecycle_test.cpp)
+  target_link_libraries(joint_controller_lifecycle_test ${PROJECT_NAME})
+  ament_target_dependencies(joint_controller_lifecycle_test ${THIS_PACKAGE_INCLUDE_DEPENDS})
+  add_test(NAME joint_controller_lifecycle_test COMMAND joint_controller_lifecycle_test)
+endif()
 
 ament_package()

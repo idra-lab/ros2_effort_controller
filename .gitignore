@@ -1,2 +1,5 @@
 **/.vscode
 
+# Python interpreter caches
+__pycache__/
+*.py[cod]

@@ -55,6 +55,19 @@ class ForceImpedanceController
   double m_max_impendance_force;
   ctrl::Vector6D m_target_wrench;
 
+ protected:
+  // Extension point for torque-based task laws. Input parsing, compensated FT,
+  // watchdogs and final effort limits stay in this shared implementation.
+  virtual ctrl::Vector6D taskWrench(const ctrl::Vector6D &error,
+      const ctrl::Vector6D &velocity, const ctrl::Matrix6D &inertia,
+      ctrl::Matrix6D &stiffness, ctrl::Matrix6D &damping);
+  virtual double defaultForceFeedbackGain() const { return 1.0; }
+  virtual bool requireForceSensor() const { return false; }
+  bool inputInhibited() const { return m_input_inhibited; }
+  const KDL::Frame &currentFrame() const { return m_current_frame; }
+  const ctrl::Vector6D &contactWrench() const { return m_ft_sensor_wrench; }
+  double m_control_period_s = 0.0;
+
  private:
   template <class Message> struct TimedInput {
     Message message = Message();
