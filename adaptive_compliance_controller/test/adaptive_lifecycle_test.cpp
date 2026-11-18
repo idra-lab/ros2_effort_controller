@@ -16,6 +16,20 @@ std::string model(){
          "'/><axis xyz='"+axes[i-1]+"'/><limit lower='-2' upper='2' effort='50' velocity='1'/></joint>";
   }return xml+"</robot>";
 }
+// Select the installed ros2_control initialization API (Jazzy or Humble).
+template<class T>
+auto initializeController(T &c, const std::string &name, const std::string &urdf,
+                          const rclcpp::NodeOptions &options, int)
+    -> decltype(c.init(name, urdf, 1000, "", options)) {
+  return c.init(name, urdf, 1000, "", options);
+}
+template<class T>
+auto initializeController(T &c, const std::string &name, const std::string &,
+                          const rclcpp::NodeOptions &options, long)
+    -> decltype(c.init(name, "", options)) {
+  return c.init(name, "", options);
+}
+
 std::unique_ptr<C> controller(const std::string &name,const std::vector<rclcpp::Parameter>&extra={}){
   auto c=std::make_unique<C>();rclcpp::NodeOptions options;
   options.allow_undeclared_parameters(true).automatically_declare_parameters_from_overrides(true);
@@ -28,7 +42,7 @@ std::unique_ptr<C> controller(const std::string &name,const std::vector<rclcpp::
     rclcpp::Parameter("adaptive.stiffness_min",std::vector<double>{100.,100.,100.}),
     rclcpp::Parameter("adaptive.damping",std::vector<double>{0.,0.,0.,0.,0.,0.})};
   p.insert(p.end(),extra.begin(),extra.end());options.parameter_overrides(p);
-  check(c->init(name,"",options)==controller_interface::return_type::OK,"adaptive plugin initialized");return c;
+  check(initializeController(*c,name,model(),options,0)==controller_interface::return_type::OK,"adaptive plugin initialized");return c;
 }
 struct Hardware{
   std::array<double,3>q{0.,0.,-.01},v{},effort{};

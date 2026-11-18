@@ -27,6 +27,20 @@ std::string description(bool y_axis=false) {
   return xml+"</robot>";
 }
 
+// Select the installed ros2_control initialization API (Jazzy or Humble).
+template<class T>
+auto initializeController(T &c, const std::string &name, const std::string &urdf,
+                          const rclcpp::NodeOptions &options, int)
+    -> decltype(c.init(name, urdf, 1000, "", options)) {
+  return c.init(name, urdf, 1000, "", options);
+}
+template<class T>
+auto initializeController(T &c, const std::string &name, const std::string &,
+                          const rclcpp::NodeOptions &options, long)
+    -> decltype(c.init(name, "", options)) {
+  return c.init(name, "", options);
+}
+
 std::unique_ptr<Controller> controller(const std::string &name, bool reverse=false,
                                       double null_stiffness=1.0,
                                       const std::vector<rclcpp::Parameter> &extra={}, bool y_axis=false) {
@@ -44,7 +58,7 @@ std::unique_ptr<Controller> controller(const std::string &name, bool reverse=fal
   auto overrides=options.parameter_overrides();
   overrides.insert(overrides.end(),extra.begin(),extra.end());
   options.parameter_overrides(overrides);
-  check(result->init(name,"",options)==controller_interface::return_type::OK,
+  check(initializeController(*result,name,description(y_axis),options,0)==controller_interface::return_type::OK,
         "init uses robot_description parameter without waiting for topic");
   return result;
 }

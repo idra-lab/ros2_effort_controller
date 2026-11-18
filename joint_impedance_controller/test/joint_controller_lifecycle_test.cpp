@@ -30,6 +30,20 @@ std::string description(size_t n) {
   return xml+"</robot>";
 }
 
+// Select the installed ros2_control initialization API (Jazzy or Humble).
+template<class T>
+auto initializeController(T &c, const std::string &name, const std::string &urdf,
+                          const rclcpp::NodeOptions &options, int)
+    -> decltype(c.init(name, urdf, 1000, "", options)) {
+  return c.init(name, urdf, 1000, "", options);
+}
+template<class T>
+auto initializeController(T &c, const std::string &name, const std::string &,
+                          const rclcpp::NodeOptions &options, long)
+    -> decltype(c.init(name, "", options)) {
+  return c.init(name, "", options);
+}
+
 std::unique_ptr<Controller> controller(const std::string &name, size_t n=7,
     const std::vector<rclcpp::Parameter> &extra={}) {
   auto result = std::make_unique<Controller>();
@@ -46,7 +60,7 @@ std::unique_ptr<Controller> controller(const std::string &name, size_t n=7,
       rclcpp::Parameter("delta_tau_max",.2)};
   params.insert(params.end(),extra.begin(),extra.end());
   options.parameter_overrides(params);
-  check(result->init(name,"",options)==controller_interface::return_type::OK,"controller initialized");
+  check(initializeController(*result,name,description(n),options,0)==controller_interface::return_type::OK,"controller initialized");
   return result;
 }
 
