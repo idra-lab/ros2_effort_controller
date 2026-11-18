@@ -1,4 +1,6 @@
 #include <effort_controller_base/effort_controller_base.h>
+#include <effort_controller_base/control_math.hpp>
+#include <limits>
 
 namespace effort_controller_base {
 
@@ -57,6 +59,7 @@ EffortControllerBase::on_init() {
   if (!m_initialized) {
     auto_declare<std::string>("ik_solver", "forward_dynamics");
     auto_declare<std::string>("robot_description", "");
+    auto_declare<double>("robot_description_timeout_s", 10.0);
     auto_declare<std::string>("robot_base_link", "");
     auto_declare<std::string>("compliance_ref_link", "");
     auto_declare<std::string>("end_effector_link", "");
@@ -75,7 +78,14 @@ EffortControllerBase::on_init() {
                                             hardware_interface::HW_IF_EFFORT});
     auto_declare<double>("solver.error_scale", 1.0);
     auto_declare<int>("solver.iterations", 1);
-    m_initialized = true;
+    m_robot_description = get_node()->get_parameter("robot_description").as_string();
+    if (!m_robot_description.empty()) {
+      m_initialized = true;
+      return CallbackReturn::SUCCESS;
+    }
+    const double description_timeout = get_node()->get_parameter("robot_description_timeout_s").as_double();
+    if (!std::isfinite(description_timeout) || description_timeout <= 0.0)
+      return CallbackReturn::ERROR;
     std::string topic_name;
     RCLCPP_INFO(get_node()->get_logger(), "Namespace: %s",
                 get_node()->get_namespace());
@@ -95,13 +105,21 @@ EffortControllerBase::on_init() {
     auto executor =
         std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
     executor->add_node(robot_description_listener);
-    while (!robot_description_listener->m_description_received_) {
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::duration<double>(description_timeout);
+    while (rclcpp::ok() && !robot_description_listener->m_description_received_ &&
+           std::chrono::steady_clock::now() < deadline) {
       executor->spin_some();
       RCLCPP_INFO_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
                            1000, "Waiting for robot description");
       rclcpp::sleep_for(std::chrono::milliseconds(100));
     }
     m_robot_description = *robot_description_ptr;
+    if (m_robot_description.empty()) {
+      RCLCPP_ERROR(get_node()->get_logger(), "Timed out waiting for robot_description");
+      return CallbackReturn::ERROR;
+    }
+    m_initialized = true;
   }
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
@@ -129,9 +147,9 @@ EffortControllerBase::on_configure(
                                                    << m_compensate_coriolis);
   // // Get delta tau maximum
   m_delta_tau_max = get_node()->get_parameter("delta_tau_max").as_double();
-  if (m_delta_tau_max < 1.0) {
+  if (!std::isfinite(m_delta_tau_max) || m_delta_tau_max <= 0.0) {
     RCLCPP_ERROR(get_node()->get_logger(),
-                 "delta_tau_max must be greater than 1.0 Nm");
+                 "delta_tau_max must be finite and positive (Nm per update)");
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
         CallbackReturn::ERROR;
   }
@@ -202,6 +220,15 @@ EffortControllerBase::on_configure(
 
   // Initialize joint number
   m_joint_number = m_joint_names.size();
+  std::vector<std::string> chain_joints;
+  for (const auto &segment : m_robot_chain.segments) {
+    if (segment.getJoint().getType() != KDL::Joint::None)
+      chain_joints.push_back(segment.getJoint().getName());
+  }
+  if (chain_joints != m_joint_names) {
+    RCLCPP_ERROR(get_node()->get_logger(), "joints must match the actuated KDL chain in base-to-TCP order");
+    return CallbackReturn::ERROR;
+  }
 
   m_jacobian.resize(m_joint_number);
 
@@ -219,11 +246,16 @@ EffortControllerBase::on_configure(
       return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
           CallbackReturn::ERROR;
     }
-    if (robot_model.getJoint(m_joint_names[i])->type ==
+    const auto joint = robot_model.getJoint(m_joint_names[i]);
+    if (!joint->limits || !std::isfinite(joint->limits->effort) || joint->limits->effort <= 0.0) {
+      RCLCPP_ERROR(get_node()->get_logger(), "Missing/invalid effort limit for joint %s", m_joint_names[i].c_str());
+      return CallbackReturn::ERROR;
+    }
+    m_joint_effort_limits(i) = joint->limits->effort;
+    if (joint->type ==
         urdf::Joint::CONTINUOUS) {
-      upper_pos_limits(i) = std::nan("0");
-      lower_pos_limits(i) = std::nan("0");
-      m_joint_effort_limits(i) = std::nan("0");
+      upper_pos_limits(i) = std::numeric_limits<double>::max();
+      lower_pos_limits(i) = -std::numeric_limits<double>::max();
     } else {
       // Non-existent urdf limits are zero initialized
       upper_pos_limits(i) =
@@ -232,6 +264,11 @@ EffortControllerBase::on_configure(
           robot_model.getJoint(m_joint_names[i])->limits->lower;
       m_joint_effort_limits(i) =
           robot_model.getJoint(m_joint_names[i])->limits->effort;
+      if (!std::isfinite(upper_pos_limits(i)) || !std::isfinite(lower_pos_limits(i)) ||
+          upper_pos_limits(i) < lower_pos_limits(i)) {
+        RCLCPP_ERROR(get_node()->get_logger(), "Invalid position limits for joint %s", m_joint_names[i].c_str());
+        return CallbackReturn::ERROR;
+      }
     }
   }
 
@@ -317,8 +354,9 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 EffortControllerBase::on_deactivate(
     const rclcpp_lifecycle::State &previous_state) {
   if (m_active) {
+    writeZeroEffortCommands();
     m_joint_cmd_eff_handles.clear();
-    // m_joint_cmd_pos_handles.clear();
+    m_joint_cmd_pos_handles.clear();
     // m_joint_cmd_vel_handles.clear();
     m_joint_state_pos_handles.clear();
     m_joint_state_vel_handles.clear();
@@ -337,6 +375,10 @@ EffortControllerBase::on_activate(
         CallbackReturn::SUCCESS;
   }
   RCLCPP_INFO(get_node()->get_logger(), "Getting interfaces");
+  m_joint_cmd_pos_handles.clear();
+  m_joint_cmd_eff_handles.clear();
+  m_joint_state_pos_handles.clear();
+  m_joint_state_vel_handles.clear();
 
   // Get command handles.
   // Position
@@ -402,6 +444,8 @@ EffortControllerBase::on_activate(
   // computeJointEffortCmds(ctrl::VectorND::Zero(m_joint_number));
   // writeJointEffortCmds();
 
+  m_efforts.setZero();
+  m_old_joint_velocities.data.setZero();
   m_active = true;
   RCLCPP_INFO(get_node()->get_logger(), "Finished Base on_activate");
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
@@ -427,28 +471,18 @@ void EffortControllerBase::writeJointEffortCmds() {
   }
 }
 
-void EffortControllerBase::computeJointEffortCmds(const ctrl::VectorND &tau) {
-  // Saturation of torque rate
-  for (size_t i = 0; i < m_joint_number; i++) {
-    if (std::isnan(tau[i])) {
-      RCLCPP_ERROR(get_node()->get_logger(),
-                   "Computed torque for joint %s is NaN. Stopping controller.",
-                   m_joint_names[i].c_str());
-      std::terminate();
-    }
-    const double difference = tau[i] - m_efforts[i];
-    if (std::abs(difference) > 10.0) {
-      RCLCPP_WARN(get_node()->get_logger(),
-                  "Joint %s effort large difference detected, was: %f, "
-                  "desired: %f, difference: %f. Shutting down controller.",
-                  m_joint_names[i].c_str(), m_efforts[i], tau[i], difference);
-      std::terminate();
-    }
+void EffortControllerBase::writeZeroEffortCommands() {
+  m_efforts.setZero();
+  for (auto &handle : m_joint_cmd_eff_handles) handle.get().set_value(0.0);
+}
 
-    m_efforts[i] +=
-        std::min(std::max(difference, -m_delta_tau_max), m_delta_tau_max);
-    
+bool EffortControllerBase::computeJointEffortCmds(const ctrl::VectorND &tau) {
+  if (!control_math::limitEffort(tau, m_joint_effort_limits.data, m_delta_tau_max, m_efforts)) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Invalid effort command; stopping controller");
+    writeZeroEffortCommands();
+    return false;
   }
+  return true;
 }
 
 void EffortControllerBase::computeIKSolution(
@@ -602,11 +636,8 @@ void EffortControllerBase::updateJointStates() {
 
     m_joint_positions(i) = position_interface.get_value();
     // m_joint_velocities(i) = (m_dotq_alpha * velocity_interface.get_value() + (1 - m_dotq_alpha) * m_old_joint_velocities(i));
-    m_joint_velocities(i) =
-        std::round((m_dotq_alpha * velocity_interface.get_value() +
-                    (1 - m_dotq_alpha) * m_old_joint_velocities(i)) *
-                   10000) /
-        10000;
+    m_joint_velocities(i) = m_dotq_alpha * velocity_interface.get_value() +
+                    (1 - m_dotq_alpha) * m_old_joint_velocities(i);
     m_old_joint_velocities(i) = m_joint_velocities(i);
   }
 }

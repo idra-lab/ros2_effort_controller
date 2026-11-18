@@ -37,7 +37,8 @@ GravityCompensation::on_configure(
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 GravityCompensation::on_activate(
     const rclcpp_lifecycle::State &previous_state) {
-  Base::on_activate(previous_state);
+  const auto ret = Base::on_activate(previous_state);
+  if (ret != CallbackReturn::SUCCESS) return ret;
 
   // Update joint states
   Base::updateJointStates();
@@ -54,9 +55,6 @@ GravityCompensation::on_activate(
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 GravityCompensation::on_deactivate(
     const rclcpp_lifecycle::State &previous_state) {
-  // Stop drifting by sending zero joint velocities
-  Base::computeJointEffortCmds(ctrl::Vector6D::Zero());
-  Base::writeJointEffortCmds();
   Base::on_deactivate(previous_state);
 
   RCLCPP_INFO(get_node()->get_logger(), "Finished Impedance on_deactivate");
@@ -73,7 +71,7 @@ controller_interface::return_type GravityCompensation::update(
   ctrl::VectorND tau_tot = computeTorque();
 
   // Saturation of the torque
-  Base::computeJointEffortCmds(tau_tot);
+  if (!Base::computeJointEffortCmds(tau_tot)) return controller_interface::return_type::ERROR;
 
   // Write final commands to the hardware interface
   Base::writeJointEffortCmds();

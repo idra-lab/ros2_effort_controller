@@ -1,0 +1,21 @@
+Adaptive Compliance Controller — torque-output adaptation
+
+Based on the control formulation and original adaptive compliance implementation by
+Luca Beber and co-authors:
+L. Beber, E. Lamon, D. Nardi, D. Fontanelli, M. Saveriano, L. Palopoli,
+"A Passive Variable Impedance Control Strategy with Viscoelastic Parameters
+Estimation of Soft Tissues for Safe Ultrasonography", ICRA 2024, pp. 1298–1304.
+DOI: 10.1109/ICRA57147.2024.10610167.
+
+Source reference:
+https://github.com/lucabeber/cartesian_controllers/tree/036c1b6ca4ebc158802cf7968fbc767b3e8d8d78/cartesian_adaptive_compliance_controller
+Original repository license: BSD 3-Clause, Copyright 2019 FZI Research Center
+for Information Technology. The accompanying LICENSE preserves these terms.
+
+This port changes the output to joint effort commands, rewrites the three-variable
+QP as a fixed-size active-set solver, adds validated configurable tissue maps,
+uses fixed damping in the power accounting, and reuses compensated FT input,
+watchdogs and hardware effort limits. It does not copy the upstream compiled
+qpOASES or MatLogger libraries, experimental data or automatic probe motions.
+The upstream FDCC implementation and the torque port have different plant dynamics;
+original experimental results are not hardware validation of this implementation.

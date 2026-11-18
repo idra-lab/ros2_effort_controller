@@ -1,0 +1,7 @@
+<library path="adaptive_compliance_controller">
+  <class name="adaptive_compliance_controller/AdaptiveComplianceController"
+         type="adaptive_compliance_controller::AdaptiveComplianceController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>Torque-based variable Cartesian stiffness with Hunt-Crossley tissue model and energy-tank QP constraints.</description>
+  </class>
+</library>
