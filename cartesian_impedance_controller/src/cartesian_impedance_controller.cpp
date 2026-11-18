@@ -1,9 +1,14 @@
 #include <cartesian_impedance_controller/cartesian_impedance_controller.h>
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <effort_controller_base/control_math.hpp>
 
 namespace cartesian_impedance_controller {
 
 CartesianImpedanceController::CartesianImpedanceController()
-    : Base::EffortControllerBase(), m_hand_frame_control(true) {}
+    : Base::EffortControllerBase() {}
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 CartesianImpedanceController::on_init() {
@@ -13,8 +18,6 @@ CartesianImpedanceController::on_init() {
     return ret;
   }
 
-  auto_declare<std::string>("ft_sensor_ref_link", "");
-  auto_declare<bool>("hand_frame_control", true);
   auto_declare<double>("nullspace_stiffness", 0.0);
   auto_declare<bool>("compensate_dJdq", false);
   auto_declare<std::vector<double>>("nullspace_desired_configuration",
@@ -28,7 +31,10 @@ CartesianImpedanceController::on_init() {
   auto_declare<double>("stiffness.rot_x", default_rot_stiff);
   auto_declare<double>("stiffness.rot_y", default_rot_stiff);
   auto_declare<double>("stiffness.rot_z", default_rot_stiff);
-  auto_declare<double>("max_impedance_force", 70.0); // TODO
+  auto_declare<double>("max_impedance_force", 70.0);
+  auto_declare<double>("max_impedance_torque", 10.0);
+  auto_declare<double>("command_timeout_s", 0.0); // zero holds the latest equilibrium indefinitely
+  auto_declare<double>("task_inertia_cutoff", 1e-6);
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
       CallbackReturn::SUCCESS;
@@ -43,18 +49,6 @@ CartesianImpedanceController::on_configure(
     return ret;
   }
 
-  // Make sure sensor link is part of the robot chain
-  m_ft_sensor_ref_link =
-      get_node()->get_parameter("ft_sensor_ref_link").as_string();
-  if (!Base::robotChainContains(m_ft_sensor_ref_link)) {
-    RCLCPP_ERROR_STREAM(get_node()->get_logger(),
-                        m_ft_sensor_ref_link
-                            << " is not part of the kinematic chain from "
-                            << Base::m_robot_base_link << " to "
-                            << Base::m_end_effector_link);
-    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::
-        CallbackReturn::ERROR;
-  }
   // Set stiffness
   ctrl::Vector6D tmp;
   tmp[0] = get_node()->get_parameter("stiffness.trans_x").as_double();
@@ -63,6 +57,11 @@ CartesianImpedanceController::on_configure(
   tmp[3] = get_node()->get_parameter("stiffness.rot_x").as_double();
   tmp[4] = get_node()->get_parameter("stiffness.rot_y").as_double();
   tmp[5] = get_node()->get_parameter("stiffness.rot_z").as_double();
+
+  if (!tmp.allFinite() || tmp.minCoeff() <= 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Stiffness values must be finite and positive");
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::ERROR;
+  }
 
   m_cartesian_stiffness = tmp.asDiagonal();
 
@@ -77,10 +76,25 @@ CartesianImpedanceController::on_configure(
   m_cartesian_damping = tmp.asDiagonal();
 
   m_max_impendance_force =
-      get_node()->get_parameter("max_impedance_force").as_double(); // TODO
+      get_node()->get_parameter("max_impedance_force").as_double();
+  m_max_impedance_torque = get_node()->get_parameter("max_impedance_torque").as_double();
+  m_command_timeout_s = get_node()->get_parameter("command_timeout_s").as_double();
+  m_task_inertia_cutoff = get_node()->get_parameter("task_inertia_cutoff").as_double();
+  if (!std::isfinite(m_max_impendance_force) || m_max_impendance_force <= 0.0 ||
+      !std::isfinite(m_max_impedance_torque) || m_max_impedance_torque <= 0.0 ||
+      !std::isfinite(m_command_timeout_s) || m_command_timeout_s < 0.0 ||
+      !std::isfinite(m_task_inertia_cutoff) || m_task_inertia_cutoff <= 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Invalid impedance limits, timeout or inertia cutoff");
+    return CallbackReturn::ERROR;
+  }
   // Set nullspace stiffness
   m_null_space_stiffness =
       get_node()->get_parameter("nullspace_stiffness").as_double();
+  if (!std::isfinite(m_null_space_stiffness) || m_null_space_stiffness < 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(), "nullspace_stiffness must be finite and nonnegative");
+    return CallbackReturn::ERROR;
+  }
+  m_q_ns = ctrl::VectorND::Zero(Base::m_joint_number);
   if (m_null_space_stiffness > 0.0) {
     // Set nullspace configuration
     std::vector<double> nullspace_config =
@@ -92,7 +106,9 @@ CartesianImpedanceController::on_configure(
           get_node()->get_logger(),
           "Null space configuration is empty, zeroing null space stiffness");
       m_null_space_stiffness = 0.0;
-    } else if (nullspace_config.size() != Base::m_joint_number) {
+    } else if (nullspace_config.size() != Base::m_joint_number ||
+               !std::all_of(nullspace_config.begin(), nullspace_config.end(),
+                            [](double x) { return std::isfinite(x); })) {
       RCLCPP_ERROR(get_node()->get_logger(),
                    "Null space configuration size does not match joint number: "
                    "%zu != %zu",
@@ -101,7 +117,7 @@ CartesianImpedanceController::on_configure(
           CallbackReturn::ERROR;
     }
     m_q_ns = ctrl::VectorND::Zero(Base::m_joint_number);
-    for (size_t i = 0; i < Base::m_joint_number; ++i) {
+    for (size_t i = 0; i < nullspace_config.size(); ++i) {
       m_q_ns(i) = nullspace_config[i];
     }
     RCLCPP_INFO_STREAM(get_node()->get_logger(),
@@ -117,28 +133,6 @@ CartesianImpedanceController::on_configure(
 
   // Set the identity matrix with dimension of the joint space
   m_identity = ctrl::MatrixND::Identity(m_joint_number, m_joint_number);
-  // Make sure sensor wrenches are interpreted correctly
-  // setFtSensorReferenceFrame(Base::m_end_effector_link);
-
-  m_target_wrench_subscriber =
-      get_node()->create_subscription<geometry_msgs::msg::WrenchStamped>(
-          get_node()->get_name() + std::string("/target_wrench"), 10,
-          std::bind(&CartesianImpedanceController::targetWrenchCallback, this,
-                    std::placeholders::_1));
-                
-  m_ft_sensor_subscriber =
-      get_node()->create_subscription<geometry_msgs::msg::WrenchStamped>(
-          get_node()->get_name() + std::string("/ft_sensor_wrench"), 10,
-          std::bind(&CartesianImpedanceController::ftSensorWrenchCallback, this,
-                    std::placeholders::_1));
-
-  // m_ft_sensor_wrench_subscriber =
-  //   get_node()->create_subscription<geometry_msgs::msg::WrenchStamped>(
-  //     get_node()->get_name() + std::string("/ft_sensor_wrench"),
-  //     10,
-  //     std::bind(&CartesianImpedanceController::ftSensorWrenchCallback, this,
-  //     std::placeholders::_1));
-
   m_target_frame_subscriber =
       get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
           get_node()->get_name() + std::string("/target_frame"), 1,
@@ -158,13 +152,18 @@ CartesianImpedanceController::on_configure(
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 CartesianImpedanceController::on_activate(
     const rclcpp_lifecycle::State &previous_state) {
-  Base::on_activate(previous_state);
+  const auto ret = Base::on_activate(previous_state);
+  if (ret != CallbackReturn::SUCCESS) return ret;
 
   // Update joint states
   Base::updateJointStates();
 
   // Compute the forward kinematics
-  Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame);
+  if (!Base::m_joint_positions.data.allFinite() || !Base::m_joint_velocities.data.allFinite() ||
+      Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame) < 0) {
+    Base::on_deactivate(previous_state);
+    return CallbackReturn::ERROR;
+  }
 
   // Set the target frame to the current frame
   m_target_frame = m_current_frame;
@@ -177,8 +176,9 @@ CartesianImpedanceController::on_activate(
   m_target_velocity = ctrl::Vector6D::Zero();  
   m_last_time_target_frame_received = get_node()->now();
 
-  m_target_wrench = ctrl::Vector6D::Zero();
-  m_ft_sensor_wrench = ctrl::Vector6D::Zero();
+  // Ignore pre-activation messages without racing subscription buffer writes.
+  m_activation_time = std::chrono::steady_clock::now();
+  m_input_inhibited = true;
 #if LOGGING
   m_logger = XBot::MatLogger2::MakeLogger("/tmp/cart_impedance_log");
   m_logger->set_buffer_mode(XBot::VariableBuffer::Mode::circular_buffer);
@@ -190,9 +190,6 @@ CartesianImpedanceController::on_activate(
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 CartesianImpedanceController::on_deactivate(
     const rclcpp_lifecycle::State &previous_state) {
-  // Stop drifting by sending zero joint velocities
-  Base::computeJointEffortCmds(ctrl::Vector6D::Zero());
-  Base::writeJointEffortCmds();
   Base::on_deactivate(previous_state);
 
   RCLCPP_INFO(get_node()->get_logger(), "Finished Impedance on_deactivate");
@@ -206,11 +203,26 @@ CartesianImpedanceController::update(const rclcpp::Time &time,
   // Update joint states
   Base::updateJointStates();
 
-  // Compute the torque to applay at the joints
-  ctrl::VectorND tau_tot = computeTorque();
+  if (!Base::m_joint_positions.data.allFinite() || !Base::m_joint_velocities.data.allFinite()) {
+    Base::writeZeroEffortCommands();
+    return controller_interface::return_type::ERROR;
+  }
+  ctrl::VectorND tau_tot;
+  try {
+    tau_tot = computeTorque();
+  } catch (const std::exception &error) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Impedance computation failed: %s", error.what());
+    Base::writeZeroEffortCommands();
+    return controller_interface::return_type::ERROR;
+  }
+  if (!tau_tot.allFinite()) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Non-finite impedance torque; stopping controller");
+    Base::writeZeroEffortCommands();
+    return controller_interface::return_type::ERROR;
+  }
 
   // Saturation of the torque
-  Base::computeJointEffortCmds(tau_tot);
+  if (!Base::computeJointEffortCmds(tau_tot)) return controller_interface::return_type::ERROR;
 
   // Write final commands to the hardware interface
   Base::writeJointEffortCmds();
@@ -256,325 +268,127 @@ ctrl::Vector6D CartesianImpedanceController::computeMotionError() {
 }
 
 ctrl::VectorND CartesianImpedanceController::computeTorque() {
-  // Redefine joints velocities in Eigen format
-  ctrl::VectorND q = Base::m_joint_positions.data;
-  ctrl::VectorND q_dot = Base::m_joint_velocities.data;
-  ctrl::VectorND q_null_space(Base::m_joint_number);
+  namespace math = effort_controller_base::control_math;
+  const auto invalid = [this]() -> ctrl::VectorND {
+    return ctrl::VectorND::Constant(Base::m_joint_number, std::numeric_limits<double>::quiet_NaN());
+  };
+  const ctrl::VectorND &q = Base::m_joint_positions.data;
+  const ctrl::VectorND &q_dot = Base::m_joint_velocities.data;
+  if (Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame) < 0 ||
+      Base::m_jnt_to_jac_solver->JntToJac(Base::m_joint_positions, Base::m_jacobian) < 0)
+    return invalid();
+  readInputs();
+  const ctrl::MatrixND &jac = Base::m_jacobian.data;
+  KDL::JntSpaceInertiaMatrix mass(Base::m_joint_number);
+  if (m_dyn_solver->JntToMass(Base::m_joint_positions, mass) < 0) return invalid();
+  ctrl::Matrix6D lambda, task_pinv;
+  ctrl::MatrixND inverse_mass_jt;
+  if (!math::taskInertia(mass.data, jac, m_task_inertia_cutoff,
+                         lambda, inverse_mass_jt, task_pinv)) return invalid();
 
-  // Compute the forward kinematics
-  Base::m_fk_solver->JntToCart(Base::m_joint_positions, m_current_frame);
-
-  debug_msg::msg::Debug debug_msg;
-
-  // Compute the jacobian
-  Base::m_jnt_to_jac_solver->JntToJac(Base::m_joint_positions,
-                                      Base::m_jacobian);
-
-  // Compute the pseudo-inverse of the jacobian
-  ctrl::MatrixND jac = Base::m_jacobian.data;
-  ctrl::MatrixND jac_tran_pseudo_inverse;
-
-  pseudoInverse(jac.transpose(), &jac_tran_pseudo_inverse);
-
-  KDL::JntSpaceInertiaMatrix M(Base::m_joint_number);
-  m_dyn_solver->JntToMass(Base::m_joint_positions, M);
-  ctrl::Matrix6D Lambda = (jac * M.data.inverse() * jac.transpose()).inverse();
-  // RCLCPP_INFO_STREAM_THROTTLE(
-  //     get_node()->get_logger(), *get_node()->get_clock(), 5000,
-  //     "Inertia matrix: \n" <<
-  //         Lambda<< "\n");
-  // Compute the motion error
-  ctrl::Vector6D motion_error = computeMotionError();
-
-  // Initialize the torque vectors
-  ctrl::VectorND tau_task(Base::m_joint_number), tau_null(Base::m_joint_number),
-      tau_ext(Base::m_joint_number), tau_task_old(Base::m_joint_number),
-      tau(Base::m_joint_number);
-
-  // init tau to zero
-  tau.setZero();
-  tau_ext.setZero();
-  tau_task_old.setZero();
-  tau_task.setZero();
-  tau_null.setZero();
-
-  // Compute the stiffness and damping in the base link
-  const auto base_link_stiffness =
-      Base::displayInBaseLink(m_cartesian_stiffness, Base::m_end_effector_link);
-
-  ctrl::Matrix6D K_d = base_link_stiffness;
-  // Eigen::VectorXd damping_correction = 3.0 * Eigen::VectorXd::Ones(6);
-  ctrl::Matrix6D D_d = compute_correct_damping(Lambda, K_d, std::sqrt(2.0)/2.0);
-
-  // D_d = Base::displayInBaseLink(m_cartesian_damping, Base::m_end_effector_link);
-  ctrl::Vector6D stiffness_torque = jac.transpose() * (K_d * motion_error);
-  ctrl::Vector6D damping_torque = jac.transpose() * (D_d * ( - jac * q_dot));
-  // ctrl::Vector6D dot_error = 0.3 * m_dot_error_old + 0.7 * (motion_error - m_error_old) / 0.001;
-
-  // // m_error_old = motion_error;
-  // RCLCPP_INFO_STREAM(
-  //     get_node()->get_logger(), 
-  //     "Commanded pos and vel:" << motion_error.transpose() << " , "
-  //                              << (m_target_velocity - jac * q_dot).transpose()  
-  //       );
-  
-  // RCLCPP_INFO_STREAM_THROTTLE(
-  //     get_node()->get_logger(), *get_node()->get_clock(), 5000,
-  //     "Damping matrix in ee frame: \n"
-  //         << Base::displayInTipLink(D_d, Base::m_end_effector_link) << "\n Force in ee frame: \n"
-  //         << Base::displayInTipLink(force, Base::m_end_effector_link) << "\n Force in base frame: \n"
-  //       );
-  // Compute the task torque
-  tau_task = stiffness_torque + damping_torque;
-
-  KDL::JntArray tau_coriolis(Base::m_joint_number),
-      tau_gravity(Base::m_joint_number);
-
+  const ctrl::Vector6D motion_error = computeMotionError();
+  ctrl::Matrix6D stiffness = Base::displayInBaseLink(m_cartesian_stiffness, Base::m_end_effector_link);
+  ctrl::Matrix6D damping;
+  if (!math::modalDamping(lambda, stiffness, std::sqrt(0.5), damping)) return invalid();
+  ctrl::VectorND tau = ctrl::VectorND::Zero(Base::m_joint_number);
+  ctrl::VectorND null_torque = ctrl::VectorND::Zero(Base::m_joint_number);
+  KDL::JntArray coriolis(Base::m_joint_number), gravity(Base::m_joint_number);
+  coriolis.data.setZero();
+  gravity.data.setZero();
   if (m_compensate_gravity) {
-    Base::m_dyn_solver->JntToGravity(Base::m_joint_positions, tau_gravity);
-    tau = tau + tau_gravity.data;
+    if (Base::m_dyn_solver->JntToGravity(Base::m_joint_positions, gravity) < 0) return invalid();
+    tau += gravity.data;
   }
   if (m_compensate_coriolis) {
-    Base::m_dyn_solver->JntToCoriolis(Base::m_joint_positions,
-                                      Base::m_joint_velocities, tau_coriolis);
-    tau = tau + tau_coriolis.data;
+    if (Base::m_dyn_solver->JntToCoriolis(Base::m_joint_positions,
+                                        Base::m_joint_velocities, coriolis) < 0) return invalid();
+    tau += coriolis.data;
   }
-  // Computes the Jacobian derivative * q_dot, negligible for most of the robot
-  Eigen::VectorXd j_tran_lambda_jdot_qdot = Eigen::VectorXd::Zero(Base::m_joint_number);
+  ctrl::Vector6D task_wrench = stiffness * motion_error - damping * (jac * q_dot);
   if (m_compensate_dJdq) {
     KDL::JntArrayVel q_in(Base::m_joint_positions, Base::m_joint_velocities);
-    KDL::Twist jac_dot_q_dot;
-    Base::m_jnt_to_jac_dot_solver->JntToJacDot(q_in, jac_dot_q_dot);
-    // convert KDL::Twist to Eigen::VectorXd
-    Eigen::VectorXd jac_dot_q_dot_eigen(6);
-    jac_dot_q_dot_eigen.head(3) << jac_dot_q_dot.vel.x(), jac_dot_q_dot.vel.y(),
-        jac_dot_q_dot.vel.z();
-    jac_dot_q_dot_eigen.tail(3) << jac_dot_q_dot.rot.x(), jac_dot_q_dot.rot.y(),
-        jac_dot_q_dot.rot.z();
-    Eigen::VectorXd j_tran_lambda_jdot_qdot =
-        jac.transpose() * Lambda * jac_dot_q_dot_eigen;
-    tau = tau + j_tran_lambda_jdot_qdot;
+    KDL::Twist derivative;
+    if (Base::m_jnt_to_jac_dot_solver->JntToJacDot(q_in, derivative) < 0) return invalid();
+    ctrl::Vector6D jdot_qdot;
+    jdot_qdot << derivative.vel.x(), derivative.vel.y(), derivative.vel.z(),
+                 derivative.rot.x(), derivative.rot.y(), derivative.rot.z();
+    // x_ddot = J q_ddot + J_dot q_dot: cancellation requires a negative sign.
+    task_wrench -= lambda * jdot_qdot;
   }
-
-  // Compute the null space torque
-  if (m_null_space_stiffness > 1e-6) {
-    // Compute dynamically consistent null space projector
-    tau_null =
-        (m_identity - jac.transpose() * Lambda * jac * M.data.inverse()) *
-        (m_null_space_stiffness * (-q + m_q_ns) - m_null_space_damping * q_dot);
-  } else {
-    tau_null = ctrl::VectorND::Zero(Base::m_joint_number);
+  if (m_null_space_stiffness > 0.0 && !m_input_inhibited) {
+    const ctrl::MatrixND projector = m_identity - jac.transpose() * task_pinv * inverse_mass_jt.transpose();
+    null_torque = projector * (m_null_space_stiffness * (m_q_ns-q) - m_null_space_damping*q_dot);
   }
-
+  if (!task_wrench.allFinite() || !tau.allFinite() || !null_torque.allFinite()) return invalid();
+  const double force_norm = task_wrench.head<3>().norm();
+  const double torque_norm = task_wrench.tail<3>().norm();
+  if (force_norm > m_max_impendance_force)
+    task_wrench.head<3>() *= m_max_impendance_force / force_norm;
+  if (torque_norm > m_max_impedance_torque)
+    task_wrench.tail<3>() *= m_max_impedance_torque / torque_norm;
+  tau += jac.transpose() * task_wrench + null_torque;
 #if DEBUG
-  Eigen::VectorXd Force = K_d * motion_error - D_d * (jac * q_dot);
-  for (int i = 0; i < 7; i++) {
-    debug_msg.stiffness_torque[i] = stiffness_torque(i);
-    debug_msg.damping_torque[i] = damping_torque(i);
-    debug_msg.coriolis_torque[i] = tau_coriolis(i);
-    debug_msg.nullspace_torque[i] = tau_null(i);
-    if (i < 6) {
-      debug_msg.impedance_force[i] = Force(i);
-    }
+  debug_msg::msg::Debug debug;
+  const ctrl::VectorND spring_torque = jac.transpose() * stiffness * motion_error;
+  const ctrl::VectorND damping_torque = -jac.transpose() * damping * jac * q_dot;
+  const size_t count = std::min(Base::m_joint_number, debug.stiffness_torque.size());
+  for (size_t i = 0; i < count; ++i) {
+    debug.stiffness_torque[i] = spring_torque[i];
+    debug.damping_torque[i] = damping_torque[i];
+    debug.coriolis_torque[i] = coriolis(i);
+    debug.nullspace_torque[i] = null_torque[i];
   }
-  m_data_publisher->publish(debug_msg);
+  for (size_t i = 0; i < 6; ++i) debug.impedance_force[i] = task_wrench[i];
+  m_data_publisher->publish(debug);
 #endif
 #if LOGGING
-  Eigen::VectorXd Force = K_d * motion_error - D_d * (jac * q_dot);
-  // lambda that computes condition number
-  auto compute_condition_number = [](const Eigen::MatrixXd &matrix) {
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(matrix);
-    Eigen::VectorXd singular_values = svd.singularValues();
-    return singular_values(0) / singular_values(singular_values.size() - 1);
-  };
-  m_logger->add("condition_number mass", compute_condition_number(M.data));
-  m_logger->add("condition_number jac", compute_condition_number(jac));
-  for (int i = 0; i < 7; i++) {
-    m_logger->add("stiffness_" + std::to_string(i), stiffness_torque(i));
-    m_logger->add("damping_" + std::to_string(i), damping_torque(i));
-    m_logger->add("coriolis_" + std::to_string(i), tau_coriolis(i));
-    m_logger->add("nullspace_" + std::to_string(i), tau_null(i));
-    if (i < 6) {
-      m_logger->add("impedance_force_" + std::to_string(i), Force(i));
-    }
-  }
+  m_logger->add("task_wrench", task_wrench);
+  m_logger->add("joint_torque", tau);
 #endif
-  
-double k_p = 1.0;
-  // Compute the torque to achieve the desired force
-  if (m_target_wrench.norm() > 0.1) {
-    tau_ext = jac.transpose() * (m_target_wrench + k_p * (m_target_wrench + m_ft_sensor_wrench));
-    RCLCPP_INFO_STREAM_THROTTLE(
-        get_node()->get_logger(), *get_node()->get_clock(), 5000,
-        "External wrench desired: \n"
-            << m_target_wrench << "\n"
-            << "Measured wrench: \n"
-            << m_ft_sensor_wrench << "\n" <<
-            "Torque ext: \n"
-            << tau_ext.transpose() << "\n" <<
-            "Feedforward target wrench: \n" <<
-            (m_target_wrench + k_p * (m_target_wrench + m_ft_sensor_wrench)).transpose() << "\n"
-      );
-  }
-  else {
-    tau_ext = ctrl::VectorND::Zero(Base::m_joint_number);
-  }
-  // Sum up all torques
-  tau += tau_task + tau_null + tau_ext;
-  
-  // // tau = ctrl::VectorND::Zero(Base::m_joint_number);
-  // Base::m_dyn_solver->JntToCoriolis(Base::m_joint_positions,
-  //                                     Base::m_joint_velocities, tau_coriolis);
-  // // Compute error dot and dot dot
-  // ctrl::Vector6D dot_error = 0.5 * (jac * q_dot) + 0.5 * m_error_dot_old;
-  // ctrl::Vector6D dot_dot_error = 0.6 * (dot_error - m_error_dot_old) / 0.001 + 0.4 * m_error_dot_dot_old;
-  // m_error_dot_dot_old = dot_dot_error;
-  // m_error_dot_old = dot_error;
-  // m_error_old = motion_error;
-  // ctrl::Vector6D error_dot_joints = m_target_velocity - jac * q_dot;
-  // ctrl::Vector6D force = K_d * motion_error + D_d * (m_target_velocity - jac * q_dot) - Lambda * dot_dot_error + jac_tran_pseudo_inverse * (tau_coriolis.data + j_tran_lambda_jdot_qdot);
-  // ctrl::Vector6D force2 = K_d * motion_error + D_d * (m_target_velocity - jac * q_dot) + jac_tran_pseudo_inverse * (tau_coriolis.data + j_tran_lambda_jdot_qdot);
-  // ctrl::Vector6D vel = - jac * q_dot;
-  // auto tmp = jac_tran_pseudo_inverse * (tau_coriolis.data + j_tran_lambda_jdot_qdot);
-
-  // // Publish impedance data
-  // ctrl::Vector6D force_ee = Base::displayInTipLink(force, Base::m_end_effector_link);
-  // ctrl::Vector6D force_ee2 = Base::displayInTipLink(force2, Base::m_end_effector_link);
-
-  // static std_msgs::msg::Float64MultiArray impedance_message;
-  // impedance_message.data = {motion_error(2),
-  //                           dot_error(2),
-  //                           dot_dot_error(2),
-  //                           error_dot_joints(2),
-  //                           force_ee(2),
-  //                           force_ee2(2),
-  //                           vel(2),
-  //                           m_target_velocity(2),
-  //                           m_target_frame.p.z(),
-  //                           m_current_frame.p.z(),
-  //                           tmp(2)
-  //                           };
-  // // ctrl::Matrix6D D_ee = Base::displayInTipLink(D_d, Base::m_end_effector_link);
-  // // ctrl::Vector6D force_ee = Base::displayInTipLink(force, Base::m_end_effector_link);
-  // // impedance_message.data = {D_ee(2,2),force_ee(2),D_ee(0,0),D_ee(1,1),D_ee(2,2),D_ee(3,3),D_ee(4,4),D_ee(5,5),
-  // //                          force_ee(0),force_ee(1),force_ee(2),force_ee(3),force_ee(4),force_ee(5)};
-  // m_data_impedance_publisher->publish(impedance_message);
-
-
-
   return tau;
 }
 
-void CartesianImpedanceController::targetWrenchCallback(
-    const geometry_msgs::msg::WrenchStamped::SharedPtr wrench) {
-  // Parse the target wrench
-  m_target_wrench[0] = wrench->wrench.force.x;
-  m_target_wrench[1] = wrench->wrench.force.y;
-  m_target_wrench[2] = wrench->wrench.force.z;
-  m_target_wrench[3] = wrench->wrench.torque.x;
-  m_target_wrench[4] = wrench->wrench.torque.y;
-  m_target_wrench[5] = wrench->wrench.torque.z;
-
-  // Check if the wrench is given in the base frame
-  if (wrench->header.frame_id != Base::m_robot_base_link) {
-    // Transform the wrench to the base frame
-    m_target_wrench =
-        Base::displayInBaseLink(m_target_wrench, wrench->header.frame_id);
-  }
-}
-
-void CartesianImpedanceController::ftSensorWrenchCallback(
-  const geometry_msgs::msg::WrenchStamped::SharedPtr wrench)
-{
-
-  if (std::isnan(wrench->wrench.force.x) || std::isnan(wrench->wrench.force.y) ||
-      std::isnan(wrench->wrench.force.z) || std::isnan(wrench->wrench.torque.x) ||
-      std::isnan(wrench->wrench.torque.y) || std::isnan(wrench->wrench.torque.z))
-  {
-    auto & clock = *get_node()->get_clock();
-    RCLCPP_WARN_STREAM_THROTTLE(get_node()->get_logger(), clock, 3000,
-                                "NaN detected in force-torque sensor wrench. Ignoring input.");
-    return;
-  }
-
-  m_ft_sensor_wrench[0] = wrench->wrench.force.x;
-  m_ft_sensor_wrench[1] = wrench->wrench.force.y;
-  m_ft_sensor_wrench[2] = wrench->wrench.force.z;
-  m_ft_sensor_wrench[3] = wrench->wrench.torque.x;
-  m_ft_sensor_wrench[4] = wrench->wrench.torque.y;
-  m_ft_sensor_wrench[5] = wrench->wrench.torque.z;
-
-  // ---------------- Gravity compensation ----------------
-  // m_mass: mass of the attached object [kg]
-  // m_com: center of mass of the attached object in sensor frame [KDL::Vector]
-  double m_mass = 0.135617; // [kg]
-  if (m_mass > 0.0)
-  {
-    // Gravity in base frame
-    KDL::Vector gravity_base(0.0, 0.0, -9.8067); // [m/s^2]
-
-    // Mass initial offset in sensor frame
-    KDL::Vector F_offset(0.0, 0.0, m_mass * 9.8067); // [N]
-
-    // Rotate gravity to sensor frame using EE orientation
-    KDL::Rotation R_ee = m_current_frame.M; // rotation of EE in base frame
-    KDL::Vector gravity_sensor = R_ee.Inverse() * gravity_base;
-
-    // Force due to gravity
-    KDL::Vector F_gravity = m_mass * gravity_sensor;
-
-    // Subtract gravity effect from measured wrench
-    m_ft_sensor_wrench[0] -= F_gravity.x();
-    m_ft_sensor_wrench[1] -= F_gravity.y();
-    m_ft_sensor_wrench[2] -= F_gravity.z() - F_offset.z();
-  }
-
-  // Check if the wrench is given in the base frame
-  if (wrench->header.frame_id != Base::m_robot_base_link) {
-    // Transform the wrench to the base frame
-    m_ft_sensor_wrench =
-        Base::displayInBaseLink(m_ft_sensor_wrench, wrench->header.frame_id);
-  }
-}
-
 void CartesianImpedanceController::targetFrameCallback(
-    const geometry_msgs::msg::PoseStamped::SharedPtr target) {
-  if (target->header.frame_id != Base::m_robot_base_link) {
-    auto &clock = *get_node()->get_clock();
-    RCLCPP_WARN_THROTTLE(
-        get_node()->get_logger(), clock, 3000,
-        "Got target pose in wrong reference frame. Expected: %s but got %s",
-        Base::m_robot_base_link.c_str(), target->header.frame_id.c_str());
-    return;
-  }
-
-  m_target_frame =
-      KDL::Frame(KDL::Rotation::Quaternion(
-                     target->pose.orientation.x, target->pose.orientation.y,
-                     target->pose.orientation.z, target->pose.orientation.w),
-                 KDL::Vector(target->pose.position.x, target->pose.position.y,
-                             target->pose.position.z));
-
-  // // Compute target velocity
-  // constexpr double dt = 0.001; // control period
-
-  // if ((get_node()->now() - m_last_time_target_frame_received).nanoseconds() < 2e6) {
-  //   KDL::Twist delta_twist = KDL::diff(m_target_frame_old, m_target_frame) / dt;
-  //   m_target_velocity[0] = delta_twist.vel.x();
-  //   m_target_velocity[1] = delta_twist.vel.y();
-  //   m_target_velocity[2] = delta_twist.vel.z();
-  //   m_target_velocity[3] = delta_twist.rot.x();
-  //   m_target_velocity[4] = delta_twist.rot.y();
-  //   m_target_velocity[5] = delta_twist.rot.z();
-  // } 
-  // else if{
-  //   ;// m_target_velocity = ctrl::Vector6D::Zero();  
-  // }
-
-  // m_target_frame_old = m_target_frame;
-  m_target_velocity = ctrl::Vector6D::Zero();
-  m_last_time_target_frame_received = get_node()->now();
+    const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+  const auto &p = msg->pose.position;
+  const auto &q = msg->pose.orientation;
+  const double norm = std::sqrt(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w);
+  if (msg->header.frame_id != Base::m_robot_base_link ||
+      !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+      !std::isfinite(norm) || norm < 1e-6) return;
+  auto normalized = *msg;
+  normalized.pose.orientation.x /= norm;
+  normalized.pose.orientation.y /= norm;
+  normalized.pose.orientation.z /= norm;
+  normalized.pose.orientation.w /= norm;
+  m_pose_input.writeFromNonRT({normalized, std::chrono::steady_clock::now(), true});
 }
+
+void CartesianImpedanceController::readInputs() {
+  const auto &pose = *m_pose_input.readFromRT();
+  const auto now = std::chrono::steady_clock::now();
+  const bool valid = pose.valid && pose.received >= m_activation_time;
+  if (valid) {
+    const auto &p = pose.message.pose.position;
+    const auto &q = pose.message.pose.orientation;
+    m_target_frame = KDL::Frame(KDL::Rotation::Quaternion(q.x, q.y, q.z, q.w),
+                               KDL::Vector(p.x, p.y, p.z));
+  }
+  bool command_ok = m_command_timeout_s == 0.0;
+  if (!command_ok && valid) {
+    const double received_age = std::chrono::duration<double>(now-pose.received).count();
+    const double stamped_age = (get_node()->now()-rclcpp::Time(pose.message.header.stamp)).seconds();
+    command_ok = received_age <= m_command_timeout_s &&
+                 stamped_age >= -0.05 && stamped_age <= m_command_timeout_s;
+  }
+  m_input_inhibited = !command_ok;
+  if (m_input_inhibited) {
+    // Expired references remove the spring and postural task; damping and
+    // configured model compensation remain active. No FT input is required.
+    m_target_frame = m_current_frame;
+  }
+}
+
 } // namespace cartesian_impedance_controller
 
 // Pluginlib

@@ -108,4 +108,12 @@ ament_export_libraries(
   ${PROJECT_NAME} 
 )
 
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(control_math_test test/control_math_test.cpp)
+  target_include_directories(control_math_test PRIVATE include)
+  target_link_libraries(control_math_test Eigen3::Eigen)
+  add_test(NAME control_math_test COMMAND control_math_test)
+endif()
+
 ament_package()

@@ -7,7 +7,7 @@ set(ADDITIONAL_COMPILE_OPTIONS -Wall -Wextra -Wpedantic -Wno-unused-parameter)
 # Optional parameter to enable logging, only if MatLogger2 is found
 # Refer to https://github.com/ADVRHumanoids/MatLogger2 to install MatLogger2
 # output file is /tmp/cart_impedance_log<timestamp>.mat
-option(LOGGING "Enable logging" ON)
+option(LOGGING "Enable logging (allocates in update; disable for experiments)" OFF)
 add_compile_options(${ADDITIONAL_COMPILE_OPTIONS})
 
 # Build in release mode if not specified
@@ -19,8 +19,12 @@ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 add_definitions(-DEIGEN_MPL2_ONLY)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(realtime_tools REQUIRED)
 find_package(effort_controller_base REQUIRED)
 find_package(debug_msg REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(pluginlib REQUIRED)
 
 # Try to find MatLogger2 if logging is enabled
 if (LOGGING)
@@ -39,9 +43,13 @@ endif()
 # Convenience variable for dependencies
 set(THIS_PACKAGE_INCLUDE_DEPENDS
         rclcpp
+        realtime_tools
         effort_controller_base
         Eigen3
         debug_msg
+        geometry_msgs
+        std_msgs
+        pluginlib
 )
 
 if (LOGGING_ENABLED)
@@ -101,5 +109,13 @@ install(
 ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(controller_lifecycle_test test/controller_lifecycle_test.cpp)
+  target_link_libraries(controller_lifecycle_test ${PROJECT_NAME})
+  ament_target_dependencies(controller_lifecycle_test ${THIS_PACKAGE_INCLUDE_DEPENDS})
+  add_test(NAME controller_lifecycle_test COMMAND controller_lifecycle_test)
+endif()
 
 ament_package()

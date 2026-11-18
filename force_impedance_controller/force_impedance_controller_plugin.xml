@@ -1,0 +1,11 @@
+<library path="force_impedance_controller">
+
+  <class name="force_impedance_controller/ForceImpedanceController"
+         type="force_impedance_controller::ForceImpedanceController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Cartesian impedance with compensated FT feedback and optional hybrid normal-force control.
+    </description>
+  </class>
+
+</library>

@@ -104,7 +104,8 @@ protected:
    * @param error The error to minimize
    * @param period The period for this control cycle
    */
-  void computeJointEffortCmds(const ctrl::VectorND &error);
+  bool computeJointEffortCmds(const ctrl::VectorND &error);
+  void writeZeroEffortCommands();
 
   /**
    * @brief Display the given vector in the given robot base link
